@@ -38,7 +38,7 @@ android {
     signingConfigs {
         if (releaseStore != null) {
             create("release") {
-                storeFile = file(releaseStore)
+                storeFile = rootProject.file(releaseStore)
                 storePassword = secret("storePassword", "BUXES_KEYSTORE_PASSWORD")
                 keyAlias = secret("keyAlias", "BUXES_KEY_ALIAS")
                 keyPassword = secret("keyPassword", "BUXES_KEY_PASSWORD")
