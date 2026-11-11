@@ -48,19 +48,19 @@ enum class GlassMaterial(
     val lightTint: Float,
 ) {
     /** The Wheel ring, menus, sheets. */
-    Regular(blurDp = 20f, refractionHeightDp = 16f, refractionAmountDp = 24f, darkTint = 0.38f, lightTint = 0.42f),
+    Regular(blurDp = 20f, refractionHeightDp = 16f, refractionAmountDp = 24f, darkTint = 0.22f, lightTint = 0.28f),
 
     /** The Wheel's center, small buttons. */
-    Control(blurDp = 12f, refractionHeightDp = 12f, refractionAmountDp = 18f, darkTint = 0.30f, lightTint = 0.50f),
+    Control(blurDp = 12f, refractionHeightDp = 12f, refractionAmountDp = 18f, darkTint = 0.20f, lightTint = 0.34f),
 
     /** Mini player, HUDs. */
-    Floating(blurDp = 24f, refractionHeightDp = 12f, refractionAmountDp = 16f, darkTint = 0.44f, lightTint = 0.48f),
+    Floating(blurDp = 24f, refractionHeightDp = 12f, refractionAmountDp = 16f, darkTint = 0.26f, lightTint = 0.32f),
 
     /**
      * Now Playing's orb (D-107). A thicker frost than a key's, so the creature reads as a body and
      * not a pane: the cover behind it is light and colour, never a picture seen through it.
      */
-    Orb(blurDp = 30f, refractionHeightDp = 14f, refractionAmountDp = 18f, darkTint = 0.54f, lightTint = 0.66f),
+    Orb(blurDp = 30f, refractionHeightDp = 14f, refractionAmountDp = 18f, darkTint = 0.42f, lightTint = 0.54f),
 }
 
 val LocalGlassTier = staticCompositionLocalOf { GlassTier.Solid }

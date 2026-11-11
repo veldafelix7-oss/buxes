@@ -91,7 +91,7 @@ private fun TourScreen(step: GuideStep, guide: GuideState, palette: ShellPalette
     Box(
         Modifier
             .fillMaxSize()
-            .background(TourBackground)
+            .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(app.buxes.core.designsystem.theme.Atmosphere.BuxesBlue.top, app.buxes.core.designsystem.theme.Atmosphere.BuxesBlue.bottom)))
             .pointerInput(Unit) { detectTapGestures { } }, // nothing beneath is operated
     ) {
         Column(
@@ -224,5 +224,4 @@ internal fun ModelStage(
     }
 }
 
-private val TourBackground = Color(0xFF09090B)
 private const val ADVANCE_MS = 1_100L

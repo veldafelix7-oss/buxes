@@ -42,6 +42,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.buxes.core.designsystem.artwork.ArtworkImage
+import app.buxes.core.designsystem.artwork.coverGlass
 import app.buxes.core.designsystem.glass.GlassMaterial
 import app.buxes.core.designsystem.glass.glass
 import app.buxes.core.designsystem.symbol.BuxesSymbol
@@ -157,6 +158,8 @@ fun MiniPlayer(
             // A large surface goes down only a little; its own keys go further (TACTILE, D-65).
             .pressFeedback(0.985f)
             .glass(GlassMaterial.Floating, if (colors.isIndustrial) RoundedCornerShape(3.dp) else ContinuousShape(EdgeCorner))
+            // Buxes: the song's own cover, softened, behind the glass (never on the matte displays).
+            .then(if (colors.isIndustrial || colors.isTonal) Modifier else Modifier.coverGlass(artworkUri, ContinuousShape(EdgeCorner)))
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
                 haptics.navigate(forward = true)
                 onOpen()

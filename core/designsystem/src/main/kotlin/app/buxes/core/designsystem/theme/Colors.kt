@@ -68,6 +68,24 @@ val DarkColors = BuxesColors(
     shadow = Color(0xFF000000),
 )
 
+/**
+ * Buxes's glass (the blue room, or the playing cover seen through the display): white ink always,
+ * white glass — clear, like a phone's own panes — and a deep blue for the lit selection.
+ */
+val BuxesGlassColors = DarkColors.copy(
+    canvas = Color(0xFF0B3C9C),
+    canvasRaised = Color(0xFF1A4DB0),
+    labelPrimary = Color(0xFFFFFFFF),
+    labelSecondary = Color(0xE6FFFFFF),
+    labelTertiary = Color(0xB3FFFFFF),
+    separator = Color(0x33FFFFFF),
+    highlight = Color(0xFF1456D6),
+    highlightText = Color(0xFFFFFFFF),
+    onHighlight = Color(0xFFFFFFFF),
+    glassTint = Color(0xFFFFFFFF),
+    glassRim = Color(0xFFFFFFFF),
+)
+
 val LightColors = BuxesColors(
     isDark = false,
     canvas = Color(0xFFF5F7F9),
