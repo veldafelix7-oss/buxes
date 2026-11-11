@@ -416,7 +416,8 @@ fun BuxesApp(graph: AppGraph, onSourceAction: (CapabilityAction) -> Unit, onTurn
         val state = rememberArtworkState(playingItem.item?.artworkUri, 96.dp)
         // While the next cover loads the last one holds, so a skip never dips through the blue.
         LaunchedEffect(state) {
-            if (state.bitmap != null) coverGlass = GlassArt.display(state.bitmap)
+            val bitmap = state.bitmap
+            if (bitmap != null) coverGlass = GlassArt.display(bitmap)
             else if (state.settled) coverGlass = null
         }
     }
