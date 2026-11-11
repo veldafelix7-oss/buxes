@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The mark for themed icons: the same "X", one flat colour (the launcher tints it). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M27.63 73 45.74 53.39 29.28 35H46.9L54.36 44H54.8L62.75 35H78.88L62.31 52.84L80.37 73H62.81L53.75 62.28H53.25L43.86 73Z" />
+</vector>

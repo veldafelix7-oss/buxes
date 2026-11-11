@@ -1,0 +1,85 @@
+# Performance
+
+**Date:** 2026-10-02 · Principle: budgets first, measure on a mid-range device, optimise with evidence.
+
+## 1. Reference devices
+| Class | Example | Role |
+|---|---|---|
+| Mid-range (budget target) | Pixel 6a / Galaxy A5x (API 33+, 60–120 Hz) | All budgets must pass here |
+| Low-end floor | API 29–30 device, 3–4 GB RAM | Solid tier; must remain smooth |
+| High-end | Recent Pixel/Galaxy | Full tier at 120 Hz |
+
+## 2. Budgets
+| Metric | Budget | How measured |
+|---|---|---|
+| Cold start → first frame | < 600 ms (mid-range) | Macrobenchmark `StartupTimingMetric` |
+| Cold start → interactive Home with restored queue | < 900 ms | Macrobenchmark + trace section |
+| Wheel detent → focus state change | same frame | trace sections `input.detent`, `focus.update` |
+| Detent → lens first movement | ≤ 1 frame | frame timeline |
+| List scrolling / fast spin jank | < 1% janky frames (P95 frame time < 1.0× refresh interval) | `FrameTimingMetric` on scripted spins |
+| Push/pop transition | 0 dropped frames P90 | `FrameTimingMetric` |
+| Glass surfaces per frame | ≤ 4 persistent + ≤ 1 transient | debug overlay counter |
+| Backdrop capture | 1 per window | design rule + overlay |
+| Memory (steady, browsing) | < 180 MB PSS | `dumpsys meminfo` in benchmark |
+| Image memory cache | 15% of app heap | Coil config |
+| Play → audio out (local file) | < 250 ms | trace `playback.start` → first `onIsPlayingChanged(true)` |
+| Play → audio out (LAN Subsonic) | < 800 ms | same |
+| Track transition (gapless album) | 0 ms gap (sample-accurate) | Media3 test + listening check |
+| Search: local results | < 50 ms after debounce | trace |
+| DB: library list query (50k tracks) | < 16 ms per page of 100 | instrumented test |
+| APK (universal, release) | < 25 MB | CI check |
+
+## 3. Design decisions that protect performance
+- **Single backdrop capture** shared by all glass (ADR-007); glass never samples glass.
+- **Lens** has no blur (only refraction + stain) — the most-animated glass is the cheapest.
+- **Tiers** degrade automatically: power-save, thermal ≥ SEVERE, or sustained jank (> 5% janky frames over 10 s) drops one tier for the session.
+- **Progress & positions** are read in draw phase (`drawBehind { … controller.positionMs() … }`), never `StateFlow` per frame; the time labels update at 4 Hz via a dedicated tiny composable.
+- **Rows** are stable/immutable (`@Immutable` models, `key`ed `LazyColumn`, `contentType`), no per-row glass, no per-row shadows.
+- **Artwork** requests sized to the slot bucket; palette computed once on a 64×64 decode and cached in DB.
+- **Library from DB** (sync) — no network on scroll paths.
+- **Large queues** pushed to the player in chunks.
+- **Baseline Profiles** + Startup Profile generated in CI from Macrobenchmark journeys (Home, scroll Songs, open Album, play, Now Playing, Up Next).
+- **R8 full mode**, resource shrinking, fonts subset (symbols) and variable (text).
+
+## 4. Profiling workflow
+1. Perfetto system traces with custom `trace("…")` sections (input, focus, glass draw, resolver, DB).
+2. Compose recomposition counts in debug (Layout Inspector / composition tracing).
+3. Macrobenchmark module (`:benchmark`) on a physical device — CI runs on demand, not every push.
+4. Regressions > 10% on any budget block the phase exit.
+
+## 5. Battery
+- No polling: playback events, `NetworkCallback`, `ContentObserver`, WorkManager constraints.
+- Library sync: periodic 12 h on unmetered + charging (manual "Sync now" anytime).
+- Audio offload for lossy, screen-off playback when no processing is active.
+- Glass rendering only while visible; no off-screen animations.
+
+## 6. Measured on the Nothing Phone (3a), 2026-10-08 (D-65, D-67)
+120 Hz display (8.3 ms a frame). Same scripted input each time, Carbon finish with glitter at full glow, the phone charging, Home ▸ Music and back six times, three spins across the Wheel's top, 4 s idle on Home. `dumpsys gfxinfo` (frame time p50/p90/p99, GPU p50); release → motion from screen recordings read frame by frame (the frame where Center or Menu comes back up, to the first frame the display changes).
+
+| | Before (debuggable, warm) | After (D-65, not debuggable, compiled) |
+|---|---|---|
+| Release → first motion, forward | 111 ms (a 100 ms frame gap, then a first frame that barely moves) | 56 ms (and that first frame moves 14 %) |
+| Release → first motion, back | 79 ms | 33 ms |
+| Navigation frames p50 / p90 / p99 | 22 / 36 / 150 ms | 19 / 30 / 73 ms |
+| Spin frames p50 / p90 / p99 | 17 / 38 / 53 ms | 15 / 34 / 42 ms |
+| Idle on Home: frames a second, GPU p50 | 94, 19 ms | 39, 9 ms |
+
+What moved the numbers, and by how much where it could be isolated:
+- **Not debuggable, compiled (D-67).** Same code: navigation p90 / p99 44 / 133 → 28 / 61 ms; the trace's two long frames on a forward move 38 + 71 → 18–25 + 26–47 ms across runs. Composing a column (about 1.2 ms a row, the new column's rows plus the live glimpse) is what remains; switching the glimpse off changed nothing measurable, so the cost is the column itself.
+- **The body in a cached layer.** Idle GPU per frame 19 → 9 ms: the gradients, grain and six full-window glitter passes no longer run when something else on the screen moves.
+- **The charging light at ~20 steps a second.** Idle frames 94 → 39 a second (the rest are the previews' slow cycles).
+- **The curves.** The paper move's first 50 ms: 4 % → 42 % of the way; presses start on the touch-down frame and are down in ~50 ms.
+
+### 6.1 Carbon's tonal display and the new boot (D-101, D-102), 2026-10-28
+Same phone, a non-debuggable test copy compiled ahead of time, the test tones loaded (paused), five moves Home ▸ Music and back per run, `dumpsys gfxinfo`:
+
+| | The instrument (same build) | Carbon |
+|---|---|---|
+| Moves: janky frames, frame p90, GPU p90 | 8.4 %, 34 ms, 20 ms | 7.2–7.7 %, 31–32 ms, 19 ms |
+| One boot (power off, on): janky frames, missed vsyncs, GPU p50 / p90 | 0.6 %, 0, 18 / 19 ms | 0.8 %, 0, 18 / 19 ms |
+
+- **Two cached layers carry Carbon.** The album's atmosphere and the Wheel's spun ring each sit in their own offscreen layer, like the body: before that, Carbon's moves measured 9.2–10.1 % janky (GPU p90 22–23 ms), because the atmosphere's full-screen passes and the metal ring ran again on every frame the display moved. A layer alpha on the atmosphere had also forced an offscreen pass per frame; it now fades each draw instead.
+- **Per cover, not per frame.** The palette and the atmosphere's field are worked out once per cover, off the main thread (a 32 × 32 reduction, then a 96 × 96 field), and kept while the bitmap lives.
+- **Still to measure:** Now Playing with a song playing (the seek bar's wave redraws its own small canvas every frame while the music plays), which needed the test tones played aloud.
+
+Remaining: navigation still costs two long frames (≈ 20 and 26–47 ms, composing the next column); spins still exceed 16 ms at p90 on this phone at 120 Hz. `adb shell input` taps don't get the touch boost real fingers do, so real use runs somewhat faster than these scripts. A project baseline profile and composing the next column ahead (it's already known: the focused row's) are the next steps.

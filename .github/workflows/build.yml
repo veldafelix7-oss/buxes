@@ -1,0 +1,112 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    name: Release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Android SDK
+        # The runner's SDK, with Google's license hashes written as files (the documented way for
+        # CI); the Android Gradle plugin then downloads any platform or build-tools it is missing.
+        run: |
+          set -x
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/android-sdk}}"
+          mkdir -p "$SDK/licenses"
+          printf '\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n' > "$SDK/licenses/android-sdk-license"
+          printf '\n84831b9409646a918e30573bab4c9c91346d8abd\n' > "$SDK/licenses/android-sdk-preview-license"
+          printf '\nd975f751698a77b662f1254ddbeed3901e976f5a\n' > "$SDK/licenses/intel-android-extra-license"
+          echo "sdk.dir=$SDK" > local.properties
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          ls "$SDK" || true
+
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Signing key
+        # Repository secrets first; the key in signing/ otherwise (see signing/README.md).
+        env:
+          KEYSTORE_B64: ${{ secrets.BUXES_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.BUXES_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.BUXES_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.BUXES_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.p12"
+            {
+              echo "storeFile=$RUNNER_TEMP/release.p12"
+              echo "storePassword=$KEYSTORE_PASSWORD"
+              echo "keyAlias=$KEY_ALIAS"
+              echo "keyPassword=$KEY_PASSWORD"
+            } > keystore.properties
+          else
+            cp signing/keystore.properties.ci keystore.properties
+          fi
+
+      - name: Build
+        run: |
+          set -o pipefail
+          ./gradlew :app:assembleRelease --no-daemon --console=plain 2>&1 | tee build.log
+
+      - name: Report a failed build
+        # The build's errors, filed as an issue so they can be read without the runner's logs.
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo '```'
+            grep -n -E "^e: |error:|warning: unresolved|What went wrong|Execution failed|FAILED|Caused by|Could not|Unresolved reference|> Task .* FAILED" build.log | head -n 120
+            echo
+            echo "----- tail -----"
+            tail -n 80 build.log
+            echo '```'
+          } > report.md
+          gh issue create --title "Build failed: ${{ github.sha }}" --body-file report.md --label build || gh issue create --title "Build failed: ${{ github.sha }}" --body-file report.md
+
+      - name: Name the APK
+        id: apk
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk buxes.apk
+          echo "version=$(grep -oP 'orNull \?: "\K[0-9][0-9.]*' app/build.gradle.kts | head -1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: buxes-apk
+          path: buxes.apk
+
+      - name: Publish release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ steps.apk.outputs.version }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" buxes.apk --clobber
+          else
+            gh release create "$TAG" buxes.apk --title "Buxes $TAG" --notes "Buxes $TAG — download buxes.apk and open it on your phone."
+          fi

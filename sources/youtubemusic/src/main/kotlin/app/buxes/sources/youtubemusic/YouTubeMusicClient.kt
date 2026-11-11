@@ -1,0 +1,308 @@
+package app.buxes.sources.youtubemusic
+
+import app.buxes.core.common.Outcome
+import app.buxes.core.common.BuxesError
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
+import java.io.IOException
+import java.net.URLEncoder
+import java.net.UnknownHostException
+
+/**
+ * The YouTube Music web catalogue (D-20 Y1, `Basis.UNOFFICIAL_API`): the same JSON endpoints the
+ * music.youtube.com page uses for browsing — search, browse, the up-next/radio list, likes and the
+ * account menu. It never asks for streams: there is no player call here, and nothing that would
+ * unlock media (ADR-013, CLAUDE.md). Playback belongs to the official app (YOUTUBE_MUSIC_ARCHITECTURE §8).
+ *
+ * The client identifies as the music web client, at the version the page itself reports (read from
+ * the page at most every few hours), with the device's own browser user agent.
+ *
+ * **Channels (D-86).** A Google account can have several channels (brand accounts). Signed in, the
+ * catalogue answers as the account's own channel unless asked to act as another: [onBehalfOf] names
+ * that channel's page id, sent as `context.user.onBehalfOfUser` — as the music page does, and as
+ * ytmusicapi does for brand accounts.
+ */
+internal class YouTubeMusicClient(
+    private val transport: HttpTransport,
+    private val userAgent: () -> String,
+    private val session: () -> WebSession?,
+    private val now: () -> Long = System::currentTimeMillis,
+    private val language: String = "en",
+    private val region: () -> String = { "US" },
+    /** The channel being acted as (its page id), or null for the account's own. */
+    private val onBehalfOf: () -> String? = { null },
+) {
+    private data class PageConfig(val clientVersion: String, val visitorData: String?, val loadedAt: Long)
+
+    private val configLock = Mutex()
+    @Volatile private var config: PageConfig? = null
+
+    /** A continuation as the catalogue hands it over: the newer style travels in the body. */
+    data class Continuation(val token: String, val inBody: Boolean)
+
+    // --- Endpoints -----------------------------------------------------------------------------------
+
+    suspend fun search(query: String, params: String? = null, continuation: Continuation? = null): Outcome<JsonObject> =
+        call("search", continuation) {
+            if (continuation == null) {
+                put("query", query)
+                params?.let { put("params", it) }
+            }
+        }
+
+    suspend fun browse(browseId: String, params: String? = null, continuation: Continuation? = null): Outcome<JsonObject> =
+        call("browse", continuation) {
+            if (continuation == null) {
+                put("browseId", browseId)
+                params?.let { put("params", it) }
+            }
+        }
+
+    /** The watch-next list: a song's details and the queue (or radio) that follows it. */
+    suspend fun next(videoId: String?, playlistId: String?, params: String? = null, continuation: Continuation? = null): Outcome<JsonObject> =
+        call("next", continuation) {
+            if (continuation == null) {
+                videoId?.let { put("videoId", it) }
+                playlistId?.let { put("playlistId", it) }
+                params?.let { put("params", it) }
+                put("isAudioOnly", true)
+                put("enablePersistentPlaylistPanel", true)
+            }
+        }
+
+    suspend fun like(videoId: String, liked: Boolean): Outcome<JsonObject> =
+        call(if (liked) "like/like" else "like/removelike", null) {
+            putJsonObject("target") { put("videoId", videoId) }
+        }
+
+    suspend fun accountMenu(): Outcome<JsonObject> = call("account/account_menu", null) {}
+
+    /** The account's channels, as the channel switcher lists them (D-86). Asked as the account itself. */
+    suspend fun accountsList(): Outcome<JsonObject> = call("account/accounts_list", null, asChannel = false) {
+        put("requestType", "ACCOUNTS_LIST_REQUEST_TYPE_CHANNEL_SWITCHER")
+        put("callCircumstance", "SWITCHING_USERS_FULL")
+    }
+
+    /**
+     * The channel switcher as the music page's own "Switch account" menu loads it (issue #4): a GET
+     * with the session, answered with JSON behind a `)]}'` guard. Some accounts list their channels
+     * here and not in [accountsList]. Asked as the account itself.
+     */
+    suspend fun accountSwitcher(): Outcome<JsonObject> {
+        val cfg = pageConfig()
+        val signedIn = session() ?: return Outcome.Failure(BuxesError.AuthRequired())
+        val headers = buildMap {
+            put("Accept", "application/json")
+            put("Accept-Language", language)
+            put("User-Agent", userAgent())
+            put("Referer", "$ORIGIN/")
+            put("X-Origin", ORIGIN)
+            put("X-Youtube-Client-Name", CLIENT_ID)
+            put("X-Youtube-Client-Version", cfg.clientVersion)
+            put("Cookie", signedIn.cookieHeader)
+            signedIn.authorization(now() / 1000, ORIGIN)?.let { put("Authorization", it) }
+            put("X-Goog-AuthUser", "0")
+        }
+        val response = try {
+            transport.send("GET", "$ORIGIN/getAccountSwitcherEndpoint", headers, null)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            return Outcome.Failure(if (e is UnknownHostException || e.message == "UnknownHostException") BuxesError.Offline else BuxesError.Network())
+        }
+        if (response.code !in 200..299) return interpret(response, signedIn = true)
+        val json = parseJson(unguarded(response.body)) ?: return Outcome.Failure(BuxesError.Server(null))
+        return Outcome.Success(json)
+    }
+
+    /** Artwork bytes from the catalogue's image hosts. No session goes with these. */
+    suspend fun image(url: String): ByteArray? = try {
+        val r = transport.send("GET", url, mapOf("User-Agent" to userAgent()), null)
+        r.body.takeIf { r.code in 200..299 && it.isNotEmpty() }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: IOException) {
+        null
+    }
+
+    // --- Requests ------------------------------------------------------------------------------------
+
+    private suspend fun call(
+        endpoint: String,
+        continuation: Continuation?,
+        asChannel: Boolean = true,
+        fields: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit,
+    ): Outcome<JsonObject> {
+        val first = attempt(endpoint, continuation, asChannel, fields)
+        // A 400 usually means the page has moved on to a newer client version: learn it, try once more.
+        if (first is Outcome.Failure && first.error == STALE_CLIENT) {
+            config = null
+            return attempt(endpoint, continuation, asChannel, fields).let { if (it is Outcome.Failure && it.error == STALE_CLIENT) Outcome.Failure(BuxesError.Server(400)) else it }
+        }
+        return first
+    }
+
+    private suspend fun attempt(
+        endpoint: String,
+        continuation: Continuation?,
+        asChannel: Boolean,
+        fields: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit,
+    ): Outcome<JsonObject> {
+        val cfg = pageConfig()
+        val signedIn = session()
+        val page = if (signedIn != null && asChannel) onBehalfOf() else null
+        val body = buildJsonObject {
+            putJsonObject("context") {
+                putJsonObject("client") {
+                    put("clientName", CLIENT_NAME)
+                    put("clientVersion", cfg.clientVersion)
+                    put("hl", language)
+                    put("gl", region())
+                    cfg.visitorData?.let { put("visitorData", it) }
+                }
+                putJsonObject("user") { page?.let { put("onBehalfOfUser", it) } }
+            }
+            if (continuation?.inBody == true) put("continuation", continuation.token)
+            fields()
+        }
+        val url = buildString {
+            append(API).append(endpoint).append("?prettyPrint=false")
+            if (continuation != null && !continuation.inBody) {
+                val t = URLEncoder.encode(continuation.token, "UTF-8")
+                append("&ctoken=").append(t).append("&continuation=").append(t).append("&type=next")
+            }
+        }
+        val headers = buildMap {
+            put("Content-Type", "application/json")
+            put("Accept", "application/json")
+            put("Accept-Language", language)
+            put("User-Agent", userAgent())
+            put("Origin", ORIGIN)
+            put("X-Origin", ORIGIN)
+            put("X-Youtube-Client-Name", CLIENT_ID)
+            put("X-Youtube-Client-Version", cfg.clientVersion)
+            cfg.visitorData?.let { put("X-Goog-Visitor-Id", it) }
+            if (signedIn != null) {
+                put("Cookie", signedIn.cookieHeader)
+                signedIn.authorization(now() / 1000, ORIGIN)?.let { put("Authorization", it) }
+                put("X-Goog-AuthUser", "0")
+            }
+        }
+        val response = try {
+            transport.send("POST", url, headers, body.toString().toByteArray(Charsets.UTF_8))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            return Outcome.Failure(if (e is UnknownHostException || e.message == "UnknownHostException") BuxesError.Offline else BuxesError.Network())
+        }
+        return interpret(response, signedIn != null)
+    }
+
+    private fun interpret(response: HttpResponse, signedIn: Boolean): Outcome<JsonObject> {
+        when (response.code) {
+            in 200..299 -> Unit
+            400 -> return Outcome.Failure(STALE_CLIENT)
+            401 -> return Outcome.Failure(if (signedIn) BuxesError.AuthExpired() else BuxesError.AuthRequired())
+            403 -> return Outcome.Failure(if (signedIn) BuxesError.AuthExpired() else BuxesError.Server(403))
+            404 -> return Outcome.Failure(BuxesError.NotFound("page"))
+            429 -> return Outcome.Failure(BuxesError.RateLimited(response.retryAfterSeconds?.times(1000)))
+            in 500..599 -> return Outcome.Failure(BuxesError.Server(response.code))
+            else -> return Outcome.Failure(BuxesError.Server(response.code))
+        }
+        val json = parseJson(response.body) ?: return Outcome.Failure(BuxesError.Server(null))
+        // An answer that says it isn't signed in, to a signed-in request: the session has ended.
+        if (signedIn && loggedInFlag(json) == "0") return Outcome.Failure(BuxesError.AuthExpired("signed out by the service"))
+        return Outcome.Success(json)
+    }
+
+    private fun loggedInFlag(json: JsonObject): String? =
+        json.at("responseContext", "serviceTrackingParams").arr
+            .flatMap { it.at("params").arr }
+            .firstOrNull { it.at("key").str == "logged_in" }
+            ?.at("value").str
+
+    // --- The page's own configuration ------------------------------------------------------------------
+
+    private suspend fun pageConfig(): PageConfig {
+        config?.takeIf { now() - it.loadedAt < CONFIG_TTL_MS }?.let { return it }
+        return configLock.withLock {
+            config?.takeIf { now() - it.loadedAt < CONFIG_TTL_MS }?.let { return@withLock it }
+            val loaded = loadPageConfig() ?: PageConfig(FALLBACK_CLIENT_VERSION, null, now() - CONFIG_TTL_MS + CONFIG_RETRY_MS)
+            config = loaded
+            loaded
+        }
+    }
+
+    private suspend fun loadPageConfig(): PageConfig? {
+        var page = fetchPage(cookie = null) ?: return null
+        // Without cookies the page can answer with a redirect instead (in some regions, to a cookie
+        // consent page). The session already carries the choices made on the sign-in page, so ask
+        // once more with it rather than falling back to a client version that will age.
+        if (page.code !in 200..299) {
+            val signedIn = session() ?: return null
+            page = fetchPage(cookie = signedIn.cookieHeader) ?: return null
+        }
+        if (page.code !in 200..299) return null
+        return PageConfigParser.parse(page.body.toString(Charsets.UTF_8))?.let { (version, visitor) -> PageConfig(version, visitor, now()) }
+    }
+
+    private suspend fun fetchPage(cookie: String?): HttpResponse? = try {
+        val headers = buildMap {
+            put("User-Agent", userAgent())
+            put("Accept-Language", language)
+            cookie?.let { put("Cookie", it) }
+        }
+        transport.send("GET", "$ORIGIN/", headers, null)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: IOException) {
+        null
+    }
+
+    companion object {
+        const val ORIGIN = "https://music.youtube.com"
+        private const val API = "$ORIGIN/youtubei/v1/"
+        private const val CLIENT_NAME = "WEB_REMIX"
+        private const val CLIENT_ID = "67"
+
+        /** Used only until the page says otherwise (and when it can't be read). */
+        const val FALLBACK_CLIENT_VERSION = "1.20261001.01.00"
+        private const val CONFIG_TTL_MS = 6 * 60 * 60 * 1000L
+        private const val CONFIG_RETRY_MS = 5 * 60 * 1000L
+
+        private val STALE_CLIENT = BuxesError.Server(-400)
+
+        private val lenient = Json { ignoreUnknownKeys = true; isLenient = true }
+
+        /** [body] without the `)]}'` line some endpoints put before their JSON (against script inclusion). */
+        fun unguarded(body: ByteArray): ByteArray {
+            val text = body.toString(Charsets.UTF_8).trimStart()
+            return if (text.startsWith(")]}'")) text.removePrefix(")]}'").toByteArray(Charsets.UTF_8) else body
+        }
+
+        fun parseJson(bytes: ByteArray): JsonObject? =
+            runCatching { lenient.parseToJsonElement(bytes.toString(Charsets.UTF_8)) as? JsonObject }.getOrNull()
+    }
+}
+
+/** Reads the client version and visitor id the music page was served with. */
+internal object PageConfigParser {
+    private val version = Regex("\"INNERTUBE_CLIENT_VERSION\"\\s*:\\s*\"([0-9][0-9.]{4,40})\"")
+    private val visitor = Regex("\"VISITOR_DATA\"\\s*:\\s*\"([A-Za-z0-9%_=\\-]{8,200})\"")
+
+    fun parse(html: String): Pair<String, String?>? {
+        val v = version.find(html)?.groupValues?.get(1) ?: return null
+        return v to visitor.find(html)?.groupValues?.get(1)
+    }
+}
+
+/** For tests and parsers: a JSON string literal element. */
+internal fun jsonString(value: String): JsonElement = JsonPrimitive(value)

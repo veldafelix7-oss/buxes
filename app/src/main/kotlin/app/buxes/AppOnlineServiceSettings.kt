@@ -1,0 +1,157 @@
+package app.buxes
+
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import app.buxes.feature.settings.OnlineServiceSettings
+import app.buxes.feature.settings.OnlineServiceState
+import app.buxes.feature.settings.ServiceAccount
+import app.buxes.feature.settings.ServiceApp
+import app.buxes.feature.settings.ServiceChannel
+import app.buxes.core.common.Outcome
+import app.buxes.core.common.BuxesError
+import app.buxes.core.model.PlaybackRoute
+import app.buxes.player.api.RemoteAccess
+import app.buxes.player.remote.MediaSessionRemotePlayback
+import app.buxes.sources.api.AccountIdentity
+import app.buxes.sources.api.AuthState
+import app.buxes.sources.api.Basis
+import app.buxes.sources.api.MusicEnvironment
+import app.buxes.sources.api.MusicSource
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+
+/**
+ * Settings ▸ the online service, over the registry (whether it's on, its account), the remote
+ * playback (the app that plays its songs) and the device settings (hand-off behaviour).
+ */
+class AppOnlineServiceSettings(private val graph: AppGraph) : OnlineServiceSettings {
+
+    private val context: Context get() = graph.context
+    private fun service(): MusicSource? = graph.registry.registered(MusicEnvironment.ONLINE).firstOrNull()
+
+    /**
+     * A channel switch under way, or why the last one didn't happen (D-86); and the channel list
+     * being asked for, or why it couldn't be (issue #4).
+     */
+    private data class Switch(
+        val to: String? = null,
+        val problem: String? = null,
+        val listing: Boolean = false,
+        val listProblem: String? = null,
+    )
+
+    private val switch = MutableStateFlow(Switch())
+
+    private val identities: StateFlow<List<AccountIdentity>>? get() = service()?.auth?.identities
+
+    override val state: StateFlow<OnlineServiceState?> = combine(
+        graph.registry.connectedSources,
+        graph.remotePlayback.access,
+        graph.deviceSettings.stayInBuxes,
+        identities ?: flowOf(emptyList()),
+        switch,
+    ) { sources, access, stay, channels, sw ->
+        val s = sources.firstOrNull { it.descriptor.environment == MusicEnvironment.ONLINE } ?: return@combine null
+        val signedIn = s.authenticationState is AuthState.SignedIn
+        OnlineServiceState(
+            name = s.descriptor.displayName,
+            enabled = s.enabled,
+            basisNote = if (s.descriptor.basis == Basis.UNOFFICIAL_API) "Unofficial — may stop working" else null,
+            account = when (val a = s.authenticationState) {
+                AuthState.NotRequired -> ServiceAccount.NotOffered
+                AuthState.SignedOut, is AuthState.Rejected -> ServiceAccount.SignedOut
+                AuthState.SigningIn -> ServiceAccount.SigningIn
+                is AuthState.SignedIn -> ServiceAccount.SignedIn(a.accountName)
+                AuthState.Expired -> ServiceAccount.Expired
+            },
+            // Only a service whose songs play in another app has an app to install or allow (by route).
+            app = if (graph.registry.get(s.sourceId)?.playback?.routes?.contains(PlaybackRoute.DIRECT) != false) null else ServiceApp(
+                name = s.descriptor.displayName,
+                installed = access != RemoteAccess.NO_APP,
+                controlAllowed = access == RemoteAccess.READY,
+            ),
+            stayInBuxes = stay,
+            channels = if (signedIn) channels.map { ServiceChannel(it.id, it.name, it.detail, it.selected) } else emptyList(),
+            switchingTo = sw.to,
+            channelProblem = sw.problem,
+            channelsLoading = sw.listing,
+            channelListProblem = sw.listProblem,
+        )
+    }.stateIn(graph.appScope, SharingStarted.Eagerly, null)
+
+    override fun setEnabled(enabled: Boolean) {
+        service()?.descriptor?.id?.let { graph.sourceSettings.setEnabled(it, enabled) }
+    }
+
+    override fun signIn() {
+        val id = service()?.descriptor?.id ?: return
+        start(WebSignInActivity.intent(context, id))
+    }
+
+    override fun signOut() {
+        graph.appScope.launch { graph.online.signOut() }
+    }
+
+    override fun installApp() = start(MediaSessionRemotePlayback.installIntent(app.buxes.sources.youtubemusic.YouTubeMusicSource.PROVIDER_APP_PACKAGE))
+
+    override fun openApp() = graph.remotePlayback.openApp()
+
+    override fun allowControl() = start(MediaSessionRemotePlayback.accessSettingsIntent(context))
+
+    override fun openAppInfo() = start(MediaSessionRemotePlayback.appInfoIntent(context))
+
+    override fun setStayInBuxes(enabled: Boolean) = graph.deviceSettings.setStayInBuxes(enabled)
+
+    override fun refreshChannels() {
+        val auth = service()?.auth ?: return
+        if (auth.state.value !is AuthState.SignedIn || switch.value.listing) return
+        switch.value = switch.value.copy(listing = true, listProblem = null)
+        graph.appScope.launch {
+            val result = auth.refreshIdentities()
+            val problem = (result as? Outcome.Failure)?.error?.let(::listProblem)
+            switch.value = switch.value.copy(listing = false, listProblem = problem)
+        }
+    }
+
+    /** Why the account's channels couldn't be listed, and what to do next. */
+    private fun listProblem(error: BuxesError): String = when (error) {
+        BuxesError.Offline, is BuxesError.Network -> "Couldn't reach the service to list your channels. Check the connection, then come back."
+        is BuxesError.RateLimited -> "The service asked Buxes to wait. Come back in a minute to see your channels."
+        is BuxesError.AuthExpired, is BuxesError.AuthRequired -> "The service wouldn't list your channels. Sign in again from Account, then come back."
+        else -> "Couldn't list your channels just now. Come back in a moment."
+    }
+
+    override fun selectChannel(id: String) {
+        val auth = service()?.auth ?: return
+        if (switch.value.to != null) return
+        val name = auth.identities.value.firstOrNull { it.id == id }?.name ?: return
+        val stayingOn = auth.identities.value.firstOrNull { it.selected }?.name
+        switch.value = switch.value.copy(to = id, problem = null)
+        graph.appScope.launch {
+            val result = auth.selectIdentity(id)
+            switch.value = switch.value.copy(to = null, problem = (result as? Outcome.Failure)?.error?.let { channelProblem(it, name, stayingOn) })
+        }
+    }
+
+    /** Why a switch to [name] didn't happen, and what to do next. */
+    private fun channelProblem(error: BuxesError, name: String, stayingOn: String?): String = when (error) {
+        BuxesError.Offline, is BuxesError.Network -> "Couldn't reach the service to switch to $name. Check the connection, then try again."
+        is BuxesError.Unsupported -> "$name didn't answer as itself, so Buxes stayed on ${stayingOn ?: "the current channel"}. Try again later."
+        is BuxesError.RateLimited -> "The service asked Buxes to wait. Try $name again in a minute."
+        else -> "Couldn't switch to $name. Try again in a moment."
+    }
+
+    private fun start(intent: Intent) {
+        try {
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (_: ActivityNotFoundException) {
+            // No store or settings page for it on this phone: nothing to open.
+        }
+    }
+}

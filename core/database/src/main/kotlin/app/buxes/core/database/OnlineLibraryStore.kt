@@ -1,0 +1,237 @@
+package app.buxes.core.database
+
+import androidx.room3.withWriteTransaction
+import app.buxes.core.model.SourceId
+import app.buxes.core.model.Track
+import app.buxes.core.model.TrackId
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
+import java.util.UUID
+
+/** An online playlist as lists show it. */
+data class OnlinePlaylistInfo(val id: String, val sourceId: SourceId, val name: String, val trackCount: Int, val updatedAt: Long)
+
+/** One entry of an online playlist; [entryId] is the row, which a move and a remove work on. */
+data class OnlinePlaylistEntry(val entryId: Long, val track: Track)
+
+data class OnlinePlaylistDetail(val info: OnlinePlaylistInfo, val entries: List<OnlinePlaylistEntry>)
+
+/**
+ * The ONLINE environment's library (D-34): liked songs, playlists and listening history, kept apart
+ * from the local library's favorites and never mixed with them. Rows are per account; until a
+ * source is signed in, the account is "on this device" ([DEVICE]).
+ */
+class OnlineLibraryStore(
+    private val db: BuxesDatabase,
+    private val now: () -> Long = System::currentTimeMillis,
+    private val newId: () -> String = { UUID.randomUUID().toString() },
+) {
+    private val dao = db.online()
+
+    // --- Songs ------------------------------------------------------------------------------------------
+
+    /** Keep online songs' metadata so likes, playlists, history and the queue survive a restart. */
+    suspend fun remember(tracks: Collection<Track>) = db.cacheTracks(tracks, now)
+
+    // --- Likes --------------------------------------------------------------------------------------------
+
+    fun likedIds(account: String = DEVICE): Flow<Set<TrackId>> = dao.likedIds(account).map { ids -> ids.mapTo(LinkedHashSet()) { TrackId(it) } }
+
+    fun likedTracks(account: String = DEVICE): Flow<List<Track>> = dao.likedTracks(account).map { rows -> rows.map(TrackMapping::toTrack) }
+
+    suspend fun setLiked(track: Track, liked: Boolean, account: String = DEVICE) {
+        if (liked) {
+            remember(listOf(track))
+            dao.like(OnlineLikedTrackEntity(account, track.id.value, track.source.sourceId.value, track.source.providerKey, now()))
+        } else {
+            dao.unlike(account, track.id.value)
+        }
+    }
+
+    /**
+     * The account's likes as the account itself reports them, newest first: replaces what was kept
+     * for [account] (YOUTUBE_MUSIC_ARCHITECTURE §7, "the account is authoritative").
+     */
+    suspend fun replaceLikes(account: String, tracks: List<Track>) {
+        remember(tracks)
+        val at = now()
+        db.withWriteTransaction {
+            dao.deleteLikes(account)
+            dao.likeAll(
+                tracks.distinctBy { it.id }.mapIndexed { i, t ->
+                    OnlineLikedTrackEntity(account, t.id.value, t.source.sourceId.value, t.source.providerKey, at - i, syncState = "SYNCED")
+                },
+            )
+        }
+    }
+
+    /**
+     * Everything kept for one account — likes, playlists, history — goes (sign-out). Other accounts'
+     * rows, the device's own online rows and the local library are untouched.
+     */
+    suspend fun forgetAccount(account: String) {
+        require(account != DEVICE) { "the device's own online library isn't an account" }
+        db.withWriteTransaction {
+            dao.deleteLikes(account)
+            dao.deletePlaylists(account)
+            dao.clearHistory(account)
+        }
+    }
+
+    /**
+     * Everything kept for every account goes — all the channels of the account signing out (D-86),
+     * and anything left by an earlier one. The device's own online rows and the local library stay.
+     */
+    suspend fun forgetAccounts() {
+        db.withWriteTransaction {
+            dao.deleteAccountLikes()
+            dao.deleteAccountPlaylists()
+            dao.clearAccountHistory()
+        }
+    }
+
+    suspend fun likeCount(account: String = DEVICE): Int = dao.likeCount(account)
+
+    // --- Playlists ----------------------------------------------------------------------------------------
+
+    fun playlists(account: String = DEVICE): Flow<List<OnlinePlaylistInfo>> =
+        dao.playlists(account).map { rows -> rows.map { OnlinePlaylistInfo(it.id, SourceId(it.sourceId), it.name, it.trackCount, it.updatedAt) } }
+
+    fun playlist(id: String): Flow<OnlinePlaylistDetail?> = combine(dao.playlist(id), dao.entries(id)) { p, entries ->
+        p?.let {
+            OnlinePlaylistDetail(
+                OnlinePlaylistInfo(it.id, SourceId(it.sourceId), it.name, entries.size, it.updatedAt),
+                entries.map { e -> OnlinePlaylistEntry(e.entryId, TrackMapping.toTrack(e.track)) },
+            )
+        }
+    }
+
+    suspend fun createPlaylist(name: String, source: SourceId, tracks: List<Track> = emptyList(), account: String = DEVICE): String {
+        val id = newId()
+        val at = now()
+        dao.insertPlaylist(OnlinePlaylistEntity(id, source.value, account, remotePlaylistId = null, name = name.trim().ifEmpty { "New playlist" }, createdAt = at, updatedAt = at))
+        if (tracks.isNotEmpty()) add(id, tracks)
+        return id
+    }
+
+    suspend fun rename(id: String, name: String) {
+        if (name.isBlank()) return
+        dao.rename(id, name.trim(), now())
+    }
+
+    suspend fun delete(id: String) = dao.deletePlaylist(id)
+
+    /**
+      * Adds songs at the end, in order, leaving out any the playlist already holds and any repeated
+      * within [tracks] itself (D-110): a playlist holds a song once. Returns how many went in.
+      */
+    suspend fun add(id: String, tracks: List<Track>): Int {
+        if (tracks.isEmpty()) return 0
+        remember(tracks)
+        return db.withWriteTransaction {
+            val seen = dao.trackIds(id).toHashSet()
+            val fresh = tracks.filter { seen.add(it.id.value) }
+            if (fresh.isEmpty()) return@withWriteTransaction 0
+            val last = dao.positions(id).lastOrNull()?.position ?: 0.0
+            val at = now()
+            dao.insertEntries(fresh.mapIndexed { i, t -> OnlinePlaylistTrackEntity(playlistId = id, trackId = t.id.value, position = last + i + 1, addedAt = at) })
+            dao.touch(id, at)
+            fresh.size
+        }
+    }
+
+    /** Of ONLINE's playlists, those that already hold every one of [tracks] (D-110). */
+    suspend fun playlistsHoldingAll(tracks: List<Track>): Set<String> {
+        val ids = tracks.map { it.id.value }.distinct()
+        if (ids.isEmpty()) return emptySet()
+        return dao.playlistsHoldingAll(ids, ids.size).toSet()
+    }
+
+    suspend fun remove(id: String, entryId: Long) {
+        dao.deleteEntry(entryId)
+        dao.touch(id, now())
+    }
+
+    /** Move an entry to [toIndex], placing it between its new neighbours (fractional positions). */
+    suspend fun move(id: String, entryId: Long, toIndex: Int) = db.withWriteTransaction {
+        val others = dao.positions(id).filter { it.id != entryId }
+        val index = toIndex.coerceIn(0, others.size)
+        val before = others.getOrNull(index - 1)?.position
+        val after = others.getOrNull(index)?.position
+        val position = when {
+            before == null && after == null -> 1.0
+            before == null -> after!! - 1.0
+            after == null -> before + 1.0
+            else -> (before + after) / 2.0
+        }
+        if (after != null && before != null && after - before < MIN_GAP) {
+            // Gaps exhausted: renumber everyone, then place.
+            val renumbered = others.toMutableList()
+            renumbered.forEachIndexed { i, e -> dao.setPosition(e.id, (i + 1).toDouble()) }
+            dao.setPosition(entryId, index + 0.5)
+        } else {
+            dao.setPosition(entryId, position)
+        }
+        dao.touch(id, now())
+    }
+
+    // --- History -------------------------------------------------------------------------------------------
+
+    /**
+     * One listen to [track] — the song the listener chose, with its own source and provider id —
+     * and, when another source's EXACT copy played it, [servedBy] (D-35).
+     */
+    suspend fun record(track: Track, startedAt: Long, playedMs: Long, servedBy: SourceId? = null, account: String = DEVICE) {
+        if (playedMs <= 0) return
+        remember(listOf(track))
+        val duration = track.durationMs
+        dao.record(
+            OnlineHistoryEntity(
+                sourceId = track.source.sourceId.value,
+                accountKey = account,
+                providerId = track.source.providerKey,
+                trackId = track.id.value,
+                startedAt = startedAt,
+                playedMs = playedMs,
+                durationMs = duration,
+                completion = duration?.takeIf { it > 0 }?.let { (playedMs.toFloat() / it).coerceIn(0f, 1f) },
+                servedBy = servedBy?.value?.takeIf { it != track.source.sourceId.value },
+            ),
+        )
+    }
+
+    /** The listens, newest first, as stored (for checks and diagnostics). */
+    suspend fun listens(limit: Int = 50, account: String = DEVICE): List<OnlineHistoryEntity> = dao.listens(account, limit)
+
+    fun recentlyPlayed(limit: Int = 50, account: String = DEVICE): Flow<List<Track>> =
+        dao.recentTracks(account, limit).map { rows -> rows.map(TrackMapping::toTrack) }
+
+    suspend fun clearHistory(account: String = DEVICE) = dao.clearHistory(account)
+
+    suspend fun playedSince(since: Long): Set<TrackId> = dao.playedSince(since).mapTo(HashSet()) { TrackId(it) }
+
+    companion object {
+        /** The account of a source nobody has signed in to: the listener, on this device. */
+        const val DEVICE = ""
+        private const val MIN_GAP = 1e-6
+    }
+}
+
+/**
+ * Keep songs' metadata in `track` (in_library = 0) so anything that refers to them — likes, history,
+ * the queue, equivalence decisions — can rebuild them after a restart. A song a library source owns
+ * stays the library's row; only non-library rows are refreshed.
+ */
+internal suspend fun BuxesDatabase.cacheTracks(tracks: Collection<Track>, now: () -> Long) {
+    if (tracks.isEmpty()) return
+    val unique = tracks.distinctBy { it.id }
+    withWriteTransaction {
+        library().insertSourcesIfMissing(unique.map { it.source.sourceId.value }.distinct().map { SourceAccountEntity(it, it, lastSyncAt = null) })
+        unique.chunked(500).forEach { chunk ->
+            val owned = online().libraryIds(chunk.map { it.id.value }).toSet()
+            val at = now()
+            online().cacheTracks(chunk.filter { it.id.value !in owned }.map { TrackMapping.toEntity(it, inLibrary = false, now = at) })
+        }
+    }
+}

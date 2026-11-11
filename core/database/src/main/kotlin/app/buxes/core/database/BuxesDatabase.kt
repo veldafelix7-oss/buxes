@@ -1,0 +1,179 @@
+package app.buxes.core.database
+
+import android.content.Context
+import androidx.room3.AutoMigration
+import androidx.room3.Database
+import androidx.room3.Room
+import androidx.room3.RoomDatabase
+import androidx.room3.RoomRawQuery
+import androidx.sqlite.SQLiteConnection
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import androidx.sqlite.execSQL
+import kotlinx.coroutines.Dispatchers
+import java.io.File
+
+@Database(
+    entities = [
+        SourceAccountEntity::class,
+        TrackEntity::class,
+        AlbumEntity::class,
+        ArtistEntity::class,
+        LikedTrackEntity::class,
+        QueueStateEntity::class,
+        QueueItemEntity::class,
+        OnlineLikedTrackEntity::class,
+        OnlinePlaylistEntity::class,
+        OnlinePlaylistTrackEntity::class,
+        OnlineHistoryEntity::class,
+        TrackEquivalenceEntity::class,
+        LocalPlaylistEntity::class,
+        LocalPlaylistTrackEntity::class,
+    ],
+    version = BuxesDatabase.VERSION,
+    exportSchema = true,
+    // v2 (D-34) only adds the ONLINE tables; v3 (D-35) adds online_history.served_by (nullable);
+    // v4 (D-36) adds track_equivalence; v5 (D-38) adds track.media_kind (default SONG); v6 (D-106)
+    // adds the LOCAL playlist tables.
+    autoMigrations = [
+        AutoMigration(from = 1, to = 2),
+        AutoMigration(from = 2, to = 3),
+        AutoMigration(from = 3, to = 4),
+        AutoMigration(from = 4, to = 5),
+        AutoMigration(from = 5, to = 6),
+    ],
+)
+abstract class BuxesDatabase : RoomDatabase() {
+    abstract fun library(): LibraryDao
+    abstract fun likes(): LikeDao
+    abstract fun queue(): QueueDao
+    abstract fun online(): OnlineDao
+    abstract fun equivalence(): EquivalenceDao
+    abstract fun localPlaylists(): LocalPlaylistDao
+
+    companion object {
+        const val VERSION = 6
+        const val FILE_NAME = "buxes.db"
+
+        /**
+         * The app's database (ADR-004): Room 3 on bundled SQLite, so FTS5 is there on every API
+         * level. Before a schema upgrade the file is copied aside (see [DatabaseBackup]).
+         */
+        fun create(context: Context): BuxesDatabase {
+            val file = context.getDatabasePath(FILE_NAME)
+            DatabaseBackup.beforeOpen(file, VERSION)
+            return Room.databaseBuilder(context, BuxesDatabase::class.java, file.absolutePath)
+                .setDriver(BundledSQLiteDriver())
+                .setQueryCoroutineContext(Dispatchers.IO)
+                .addCallback(Fts.Callback)
+                .build()
+        }
+
+        /** The same database in memory, for tests: same driver, same search index. */
+        fun createInMemory(context: Context): BuxesDatabase =
+            Room.inMemoryDatabaseBuilder(context, BuxesDatabase::class.java)
+                .setDriver(BundledSQLiteDriver())
+                .setQueryCoroutineContext(Dispatchers.IO)
+                .addCallback(Fts.Callback)
+                .build()
+    }
+}
+
+/**
+ * The search index (data-model.md §3, `track_fts`). FTS5 isn't modelled by Room, so the table and
+ * the triggers that keep it current live here. It's a self-contained FTS5 table keyed by track id
+ * (not external content on `track`'s implicit rowid, which VACUUM may renumber).
+ */
+internal object Fts {
+    private val schema = listOf(
+        """CREATE VIRTUAL TABLE IF NOT EXISTS track_fts USING fts5(
+            track_id UNINDEXED, title, artist, album,
+            tokenize = 'unicode61 remove_diacritics 2', prefix = '2 3')""",
+        """CREATE TRIGGER IF NOT EXISTS track_fts_insert AFTER INSERT ON track WHEN new.in_library = 1 BEGIN
+            INSERT INTO track_fts(track_id, title, artist, album) VALUES (new.id, new.title, new.artist_display, new.album_title);
+        END""",
+        """CREATE TRIGGER IF NOT EXISTS track_fts_update AFTER UPDATE ON track BEGIN
+            DELETE FROM track_fts WHERE track_id = old.id;
+            INSERT INTO track_fts(track_id, title, artist, album)
+                SELECT new.id, new.title, new.artist_display, new.album_title WHERE new.in_library = 1;
+        END""",
+        """CREATE TRIGGER IF NOT EXISTS track_fts_delete AFTER DELETE ON track BEGIN
+            DELETE FROM track_fts WHERE track_id = old.id;
+        END""",
+    )
+
+    object Callback : RoomDatabase.Callback() {
+        override suspend fun onOpen(connection: SQLiteConnection) {
+            val existed = connection.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'track_fts'").use { it.step() }
+            schema.forEach { connection.execSQL(it) }
+            // An index created for a database that already has songs starts out filled.
+            if (!existed) {
+                connection.execSQL(
+                    "INSERT INTO track_fts(track_id, title, artist, album) " +
+                        "SELECT id, title, artist_display, album_title FROM track WHERE in_library = 1",
+                )
+            }
+        }
+    }
+
+    /**
+     * Turns what someone typed into an FTS5 query: every word must match the start of a word in
+     * the title, artist or album ("beat rev" finds "Revolver" by The Beatles). Accents and case
+     * don't matter. Returns null when there's nothing searchable.
+     */
+    fun matchExpression(text: String): String? {
+        val words = text.split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotBlank() }
+        if (words.isEmpty()) return null
+        return words.joinToString(" ") { "\"${it.replace("\"", "")}\"*" }
+    }
+
+    fun searchQuery(match: String, sources: List<String>, limit: Int): RoomRawQuery {
+        val placeholders = sources.joinToString(",") { "?" }
+        return RoomRawQuery(
+            "SELECT track.* FROM track_fts JOIN track ON track.id = track_fts.track_id " +
+                "WHERE track_fts MATCH ? AND track.in_library = 1 AND track.source_id IN ($placeholders) " +
+                "ORDER BY bm25(track_fts, 0.0, 10.0, 5.0, 2.0), track.title_sort LIMIT ?",
+        ) { statement ->
+            var i = 1
+            statement.bindText(i++, match)
+            sources.forEach { statement.bindText(i++, it) }
+            statement.bindLong(i, limit.toLong())
+        }
+    }
+}
+
+/**
+ * Pre-migration safety (ADR-004): before opening a database whose schema will change, copy the file
+ * to `buxes.db.bak-v<old>` so a failed migration can be undone. Reads the version from the SQLite
+ * header without opening the database.
+ *
+ * The database runs in WAL mode. A migration commits into `buxes.db-wal`, and until a checkpoint
+ * the file's header still names the old version, so later starts look like upgrades too. A backup,
+ * once taken, is therefore never overwritten: the copy taken before migrating is the one kept.
+ * Recent writes may still be in the WAL, so it goes along as the backup's own `-wal` (SQLite replays
+ * it when the backup is opened). The copy only appears once complete.
+ */
+internal object DatabaseBackup {
+    fun beforeOpen(file: File, targetVersion: Int) {
+        val current = userVersion(file) ?: return
+        if (current !in 1 until targetVersion) return
+        val backup = File(file.parentFile, "${file.name}.bak-v$current")
+        if (backup.exists()) return
+        val wal = File(file.parentFile, "${file.name}-wal")
+        val backupWal = File(file.parentFile, "${backup.name}-wal")
+        backupWal.delete() // never pair the copy with another file's WAL
+        if (wal.isFile && wal.length() > 0) wal.copyTo(backupWal)
+        val partial = File(file.parentFile, "${backup.name}.partial")
+        file.copyTo(partial, overwrite = true)
+        partial.renameTo(backup)
+    }
+
+    /** SQLite stores `user_version` big-endian at byte offset 60 of the header. */
+    fun userVersion(file: File): Int? {
+        if (!file.isFile || file.length() < 100) return null
+        val header = ByteArray(100)
+        file.inputStream().use { if (it.read(header) < 100) return null }
+        if (String(header, 0, 15, Charsets.US_ASCII) != "SQLite format 3") return null
+        return ((header[60].toInt() and 0xFF) shl 24) or ((header[61].toInt() and 0xFF) shl 16) or
+            ((header[62].toInt() and 0xFF) shl 8) or (header[63].toInt() and 0xFF)
+    }
+}

@@ -1,0 +1,313 @@
+package app.buxes.feature.nowplaying
+
+import android.graphics.Bitmap
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onRoot
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.buxes.core.designsystem.component.LocalOverlayHost
+import app.buxes.core.designsystem.component.OverlayHost
+import app.buxes.core.designsystem.component.PodWheel
+import app.buxes.core.designsystem.glass.GlassTier
+import app.buxes.core.designsystem.orb.OrbRenderer
+import app.buxes.core.designsystem.shell.DeviceAppearance
+import app.buxes.core.designsystem.shell.DeviceBody
+import app.buxes.core.designsystem.shell.DeviceLayout
+import app.buxes.core.designsystem.shell.FinishPreset
+import app.buxes.core.designsystem.shell.PowerButton
+import app.buxes.core.designsystem.shell.palette
+import app.buxes.core.designsystem.theme.PaperColors
+import app.buxes.core.designsystem.theme.CarbonColors
+import app.buxes.core.designsystem.theme.DisplayTheme
+import app.buxes.core.designsystem.theme.LocalLyricsBackground
+import app.buxes.core.designsystem.theme.LyricsBackground
+import app.buxes.core.designsystem.theme.BuxesTheme
+import app.buxes.core.interaction.InputRouter
+import app.buxes.core.interaction.LocalInputRouter
+import app.buxes.core.lyrics.Lyrics
+import app.buxes.core.lyrics.LyricsAttribution
+import app.buxes.core.lyrics.LyricsLine
+import app.buxes.core.lyrics.LyricsWord
+import app.buxes.core.lyrics.LyricsRequest
+import app.buxes.core.lyrics.LyricsResult
+import app.buxes.core.model.QueueUid
+import app.buxes.core.model.TrackId
+import app.buxes.player.api.AudioPulse
+import app.buxes.player.api.NowPlayingItem
+import app.buxes.player.api.PlayIntent
+import app.buxes.player.api.PlaybackController
+import app.buxes.player.api.PlaybackSnapshot
+import app.buxes.player.api.PlaybackStatus
+import app.buxes.player.api.QueueView
+import app.buxes.player.api.RepeatMode
+import kotlinx.coroutines.flow.MutableStateFlow
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.GraphicsMode
+import java.io.File
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+/**
+ * The lyric screen inside the device, rendered with Robolectric's native graphics: line by line the
+ * display alternates between Bone's paper and Carbon's black, and the words stay inside it.
+ * Screenshots go to build/screenshots/ for review.
+ */
+@RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class LyricsScreenTest {
+
+    @get:Rule
+    val compose = createComposeRule()
+
+    private val lines = listOf(
+        LyricsLine(10_000, "called me on the telephone"),
+        LyricsLine(14_000, "i wish that i could be like the cool kids"),
+        LyricsLine(18_000, "and everything they say is a little bit too long to fit on one small screen without wrapping"),
+    )
+
+    @Test fun firstLineIsLight() = check("lyrics-line-1", 11_000, PHONE, expectLight = true)
+
+    @Test fun secondLineIsDark() = check("lyrics-line-2", 15_000, PHONE, expectLight = false)
+
+    @Test fun longLineSmallScreen() = check("lyrics-line-3-small", 19_000, SMALL, expectLight = true)
+
+    @Test fun beforeTheFirstLine() = check("lyrics-intro", 0, PHONE, expectLight = true)
+
+    // Words arrive as they are sung: early in the line only its first words are in.
+    @Test fun wordsArriveOneByOne() = check("lyrics-line-1-early", 10_700, PHONE, expectLight = true)
+
+    @Test fun secondLineHalfSung() = check("lyrics-line-2-half", 15_200, PHONE, expectLight = false)
+
+    @Test fun consent() = check("lyrics-consent", 0, PHONE, expectLight = true, answer = LyricsResult.NeedsConsent)
+
+    // Classic's paper kept still (D-100): black stays black, white stays white, line after line.
+    @Test fun blackStaysOnALightLine() = check("lyrics-black-line-1", 11_000, PHONE, expectLight = false, background = LyricsBackground.BLACK)
+
+    @Test fun blackStaysOnADarkLine() = check("lyrics-black-line-2", 15_000, PHONE, expectLight = false, background = LyricsBackground.BLACK)
+
+    @Test fun blackBeforeTheFirstLine() = check("lyrics-black-intro", 0, PHONE, expectLight = false, background = LyricsBackground.BLACK)
+
+    @Test fun whiteStaysOnADarkLine() = check("lyrics-white-line-2", 15_000, PHONE, expectLight = true, background = LyricsBackground.WHITE)
+
+    @Test
+    fun `the paper turns with the lines only when automatic, and never in the line theme`() {
+        assertEquals(listOf(false, true, false, true), (0..3).map { lyricInverted(LyricsBackground.AUTOMATIC, false, true, it) })
+        assertEquals(false, lyricInverted(LyricsBackground.AUTOMATIC, false, hasLines = false, index = 1), "light until there are lines")
+        assertTrue((0..3).all { lyricInverted(LyricsBackground.BLACK, false, true, it) })
+        assertTrue((0..3).none { lyricInverted(LyricsBackground.WHITE, false, true, it) })
+        assertTrue(LyricsBackground.entries.none { lyricInverted(it, continuous = true, hasLines = true, index = 1) })
+    }
+
+    // Classic with no lyrics found: the orb shows the music, on black (D-83).
+    @Test fun notFound() = check("lyrics-not-found", 0, SMALL, expectLight = false, answer = LyricsResult.NotFound, dark = OrbRenderer.Black)
+
+    /** Kicks twice a second over a quiet bass line, as the player's bass meter reports them (D-82). */
+    private val kicks = object : AudioPulse {
+        override fun bassAt(positionMs: Long): Float = 0.04f + 0.3f * kotlin.math.exp(-(positionMs % 500) / 90.0).toFloat()
+    }
+
+    @Test
+    fun `the words swell a little with the bass`() {
+        val moving = inkWidths(kicks)
+        val swing = (moving.max() - moving.min()).toFloat() / moving.min()
+        assertTrue(swing > 0.004f && swing < SWELL_LIMIT, "the line swells a little with the kicks: ${moving.joinToString()} (${"%.4f".format(swing)})")
+    }
+
+    @Test
+    fun `without a pulse the words stay still`() {
+        val still = inkWidths(AudioPulse.None)
+        assertEquals(1, still.toSet().size, "still: ${still.joinToString()}")
+    }
+
+    @Test
+    fun `the page recedes into the orb as a soft circle, not a cut rectangle`() {
+        RuntimeEnvironment.setQualifiers(PHONE)
+        // A 20 s introduction: at 2.12 s the camera is 40 % through pulling back from the waiting "…".
+        val intro = listOf(LyricsLine(20_000, "over the water", endMs = 22_000, words = listOf(LyricsWord(20_000, "over"), LyricsWord(20_600, "the"), LyricsWord(21_000, "water"))))
+        val gateway = object : LyricsGateway {
+            override val attribution = LyricsAttribution("Lyrics Service", "https://example.com")
+            override suspend fun lyrics(request: LyricsRequest) = LyricsResult.Found(Lyrics.Synced(intro), attribution)
+            override fun allow() = Unit
+        }
+        compose.mainClock.autoAdvance = false
+        compose.setContent {
+            BuxesTheme(darkTheme = true, glassTier = GlassTier.Solid, displayTheme = DisplayTheme.CARBON) {
+                CompositionLocalProvider(LocalInputRouter provides InputRouter(), LocalOverlayHost provides OverlayHost()) {
+                    Box(Modifier.fillMaxSize()) { LyricsScreen(Controller(OrbTimeline.LINGER_MS + 720L), gateway) }
+                }
+            }
+        }
+        compose.mainClock.advanceTimeBy(500)
+        val b = compose.onRoot().captureToImage().asAndroidBitmap()
+        File(File("build/screenshots").apply { mkdirs() }, "lyrics-orb-receding.png").outputStream().use { b.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        fun lum(x: Int, y: Int): Double = b.getPixel(x, y).let { ((it shr 16 and 0xFF) + (it shr 8 and 0xFF) + (it and 0xFF)) / 765.0 }
+        val cx = b.width / 2
+        val cy = b.height / 2
+        // The page's own corners are gone: black there.
+        for ((x, y) in listOf(b.width / 20 to b.height / 20, b.width * 19 / 20 to b.height / 20, b.width / 20 to b.height * 19 / 20, b.width * 19 / 20 to b.height * 19 / 20)) {
+            assertTrue(lum(x, y) < 0.1, "corner ($x, $y) is dark: ${lum(x, y)}")
+        }
+        // Where the light paper ends, going right and going down from the centre (past the "…").
+        fun edge(dx: Int, dy: Int): Int {
+            var d = 60
+            while (cx + dx * d in 0 until b.width && cy + dy * d in 0 until b.height && lum(cx + dx * d, cy + dy * d) > 0.45) d++
+            return d
+        }
+        val right = edge(1, 0)
+        val down = edge(0, 1)
+        assertTrue(lum(cx + 60, cy) > 0.7, "paper in the middle: ${lum(cx + 60, cy)}")
+        assertTrue(kotlin.math.abs(right - down) < right * 0.12, "a circle, not the page's tall rectangle: $right across, $down down")
+        // A soft edge: the light fades over many pixels, not at one.
+        val soft = (right - 10 until right + 80).count { x -> cx + x < b.width && lum(cx + x, cy) in 0.08..0.6 }
+        assertTrue(soft > 14, "the edge fades over $soft px")
+    }
+
+    /** The lyric's ink width (px) in frames across a second of playback that moves with the clock. */
+    private fun inkWidths(pulse: AudioPulse): List<Int> {
+        RuntimeEnvironment.setQualifiers(PHONE)
+        val gateway = object : LyricsGateway {
+            override val attribution = LyricsAttribution("Lyrics Service", "https://example.com")
+            override suspend fun lyrics(request: LyricsRequest) = LyricsResult.Found(Lyrics.Synced(lines), attribution)
+            override fun allow() = Unit
+        }
+        compose.mainClock.autoAdvance = false
+        val start = compose.mainClock.currentTime
+        val controller = Controller { 10_000 + (compose.mainClock.currentTime - start) }
+        compose.setContent {
+            BuxesTheme(darkTheme = true, glassTier = GlassTier.Solid, displayTheme = DisplayTheme.CARBON) {
+                CompositionLocalProvider(LocalInputRouter provides InputRouter(), LocalOverlayHost provides OverlayHost()) {
+                    Box(Modifier.fillMaxSize()) { LyricsScreen(controller, gateway, pulse) }
+                }
+            }
+        }
+        // Let all the first line's words in (and the spring learn the song), then sample a second of it.
+        compose.mainClock.advanceTimeBy(2_500)
+        return List(12) {
+            compose.mainClock.advanceTimeBy(83)
+            val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
+            var min = Int.MAX_VALUE
+            var max = -1
+            for (y in 0 until bitmap.height step 2) for (x in 0 until bitmap.width) {
+                val c = bitmap.getPixel(x, y)
+                val lum = ((c shr 16 and 0xFF) + (c shr 8 and 0xFF) + (c and 0xFF)) / 3
+                if (lum < 90) {
+                    min = minOf(min, x)
+                    max = maxOf(max, x)
+                }
+            }
+            max - min
+        }
+    }
+
+    private fun check(
+        name: String,
+        position: Long,
+        qualifiers: String,
+        expectLight: Boolean,
+        answer: LyricsResult? = null,
+        dark: androidx.compose.ui.graphics.Color = CarbonColors.canvas,
+        background: LyricsBackground = LyricsBackground.AUTOMATIC,
+    ) {
+        RuntimeEnvironment.setQualifiers(qualifiers)
+        // The orb animates for as long as it shows: the clock is moved by hand.
+        compose.mainClock.autoAdvance = false
+        val gateway = object : LyricsGateway {
+            override val attribution = LyricsAttribution("Lyrics Service", "https://example.com")
+            override suspend fun lyrics(request: LyricsRequest) = answer ?: LyricsResult.Found(Lyrics.Synced(lines), attribution)
+            override fun allow() = Unit
+        }
+        compose.setContent {
+            BuxesTheme(darkTheme = true, glassTier = GlassTier.Solid, displayTheme = DisplayTheme.CARBON) {
+                val palette = DeviceAppearance(FinishPreset.STEEL_GRAY, display = DisplayTheme.CARBON).palette(darkTheme = true)
+                CompositionLocalProvider(
+                    LocalInputRouter provides InputRouter(),
+                    LocalOverlayHost provides OverlayHost(),
+                    LocalLyricsBackground provides background,
+                ) {
+                    Box(Modifier.fillMaxSize()) {
+                        DeviceBody(palette, Modifier.fillMaxSize())
+                        DeviceLayout(
+                            modifier = Modifier.fillMaxSize(),
+                            screen = { LyricsScreen(Controller(position), gateway) },
+                            wheel = { d -> PodWheel(onInput = {}, diameter = d, palette = palette) },
+                            powerButton = { PowerButton(on = true, palette = palette, onToggle = {}) },
+                        )
+                    }
+                }
+            }
+        }
+        compose.mainClock.advanceTimeBy(1_000)
+        val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
+        File(File("build/screenshots").apply { mkdirs() }, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        // Sample the display's paper near its top-left corner (inside the screen, away from the words).
+        val paper = dominantNear(bitmap)
+        val light = PaperColors.canvas.toArgbInt()
+        val expected = if (expectLight) light else dark.toArgbInt()
+        assertTrue(close(paper, expected), "the display should be ${if (expectLight) "light" else "dark"} ($name): ${Integer.toHexString(paper)}")
+    }
+
+    private fun androidx.compose.ui.graphics.Color.toArgbInt(): Int = android.graphics.Color.argb(
+        (alpha * 255).toInt(), (red * 255).toInt(), (green * 255).toInt(), (blue * 255).toInt(),
+    )
+
+    /** The most common colour in a band across the upper part of the screen area. */
+    private fun dominantNear(b: Bitmap): Int {
+        val counts = HashMap<Int, Int>()
+        val y0 = (b.height * 0.12).toInt()
+        val y1 = (b.height * 0.16).toInt()
+        for (y in y0 until y1) for (x in (b.width * 0.2).toInt() until (b.width * 0.8).toInt() step 3) {
+            val c = b.getPixel(x, y)
+            counts[c] = (counts[c] ?: 0) + 1
+        }
+        return counts.maxBy { it.value }.key
+    }
+
+    private fun close(a: Int, b: Int): Boolean {
+        fun ch(c: Int, s: Int) = (c shr s) and 0xFF
+        return listOf(16, 8, 0).all { kotlin.math.abs(ch(a, it) - ch(b, it)) <= 6 }
+    }
+
+    private class Controller(private val position: () -> Long) : PlaybackController {
+        constructor(position: Long) : this({ position })
+
+        override val snapshot = MutableStateFlow(
+            PlaybackSnapshot(
+                status = PlaybackStatus.Playing,
+                intent = PlayIntent.PLAY,
+                item = NowPlayingItem(QueueUid("q"), TrackId("test|1"), "Telephone", "Someone", "Album", null, 200_000, 0, 1, null, null),
+            ),
+        )
+        override val queue = MutableStateFlow(QueueView())
+        override fun positionMs() = position()
+        override fun play() = Unit
+        override fun pause() = Unit
+        override fun togglePlayPause() = Unit
+        override fun next() = Unit
+        override fun previous() = Unit
+        override fun seekTo(positionMs: Long) = Unit
+        override fun setRepeat(mode: RepeatMode) = Unit
+        override fun setShuffle(enabled: Boolean) = Unit
+        override fun playContext(tracks: List<TrackId>, startIndex: Int, contextLabel: String?, shuffle: Boolean, radio: Boolean) = Unit
+        override fun playNext(tracks: List<TrackId>) = Unit
+        override fun addToQueue(tracks: List<TrackId>) = Unit
+        override fun move(uid: QueueUid, toIndex: Int) = Unit
+        override fun remove(uids: Set<QueueUid>) = Unit
+        override fun skipTo(uid: QueueUid) = Unit
+        override fun clearUpcoming() = Unit
+    }
+
+    private companion object {
+        /** Under two percent, as designed (the swell's scale). */
+        const val SWELL_LIMIT = 0.02f
+        const val PHONE = "w411dp-h891dp-port-420dpi"
+        const val SMALL = "w320dp-h568dp-port-xhdpi"
+    }
+}

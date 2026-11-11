@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Buxes's mark: the "X" of the boot wordmark (Archivo, weight 900, width 125), in frosted white over the blue glass. Generated from the font. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- A soft glass tile behind the X. -->
+    <path android:pathData="M30 30h48a8 8 0 0 1 8 8v32a8 8 0 0 1 -8 8h-48a8 8 0 0 1 -8 -8v-32a8 8 0 0 1 8 -8z"
+        android:fillColor="#33FFFFFF" android:strokeColor="#66FFFFFF" android:strokeWidth="1" />
+    <path android:pathData="M27.63 73 45.74 53.39 29.28 35H46.9L54.36 44H54.8L62.75 35H78.88L62.31 52.84L80.37 73H62.81L53.75 62.28H53.25L43.86 73Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="54"
+                android:startY="35.00"
+                android:endX="54"
+                android:endY="73.00">
+                <item android:offset="0.0" android:color="#FFFFFFFF" />
+                <item android:offset="0.55" android:color="#FFEAFBFF" />
+                <item android:offset="1.0" android:color="#FFC2EEFF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>
