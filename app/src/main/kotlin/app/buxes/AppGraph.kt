@@ -115,7 +115,8 @@ class AppGraph(val context: Context) {
         downloads = java.io.File(context.cacheDir, "updates"),
         scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO),
         checksByItself = !BuildConfig.DEBUG,
-        canInstallReleases = !BuildConfig.DEBUG,
+        // Never installs by itself (no REQUEST_INSTALL_PACKAGES, see the manifest): it opens the release's page.
+        canInstallReleases = false,
     )
 
     /** Runs the online source's player script for its backup apps (D-98), off the app's own process. */

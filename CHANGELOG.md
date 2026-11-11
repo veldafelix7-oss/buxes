@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-11
+
+### Changed
+- **Installs past Play Protect:** Buxes no longer asks for the permission to install packages, which Play Protect in Indonesia blocks sideloaded apps for. The updater still tells you of a new release and opens its page; you download and install it from the browser.
+
 ## [1.0.0] - 2026-11-11
 
 ### Changed
