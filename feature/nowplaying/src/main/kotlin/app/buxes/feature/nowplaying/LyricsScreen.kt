@@ -43,8 +43,6 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.buxes.core.designsystem.component.Pinwheel
-import app.buxes.core.designsystem.theme.PaperColors
-import app.buxes.core.designsystem.theme.CarbonColors
 import app.buxes.core.designsystem.theme.LocalLyricsBackground
 import app.buxes.core.designsystem.theme.LocalLyricsTheme
 import app.buxes.core.designsystem.theme.LyricsBackground
@@ -266,9 +264,11 @@ fun LyricsScreen(controller: PlaybackController, gateway: LyricsGateway, pulse: 
     val inverted = lyricInverted(LocalLyricsBackground.current, continuous, lines.isNotEmpty(), index)
     val reduced = BuxesTheme.motion.reduced
     val spec = if (reduced || continuous) snap<Color>() else tween<Color>(INVERT_MS)
-    val paper by animateColorAsState(if (continuous) LineInk.Paper else if (inverted) CarbonColors.canvas else PaperColors.canvas, spec, label = "lyricPaper")
-    val ink by animateColorAsState(if (continuous) LineInk.Ivory else if (inverted) CarbonColors.labelPrimary else PaperColors.labelPrimary, spec, label = "lyricInk")
-    val quiet = if (continuous) LineInk.Quiet else if (inverted) CarbonColors.labelSecondary else PaperColors.labelSecondary
+    // Buxes: Classic's paper is glass over the song's pictures — a light pane, then a deep blue one,
+    // turning with the lines as the black and white used to — and the ink is always white.
+    val paper by animateColorAsState(if (continuous) LineInk.Paper else if (inverted) GlassPaperDark else GlassPaperLight, spec, label = "lyricPaper")
+    val ink by animateColorAsState(if (continuous) LineInk.Ivory else Color.White, spec, label = "lyricInk")
+    val quiet = if (continuous) LineInk.Quiet else Color.White.copy(alpha = 0.78f)
     // What the line draws: the same lyrics, timed by the same rules (LYRICS_ARCHITECTURE.md §12.3).
     val script = remember(lyrics, item?.durationMs, continuous) {
         if (!continuous) {
@@ -288,9 +288,11 @@ fun LyricsScreen(controller: PlaybackController, gateway: LyricsGateway, pulse: 
         Box(
             Modifier
                 .fillMaxSize()
-                .background(paper)
                 .pointerInput(Unit) { detectTapGestures(onTap = { details = !details }) },
         ) {
+            // The pictures turn with the lines, under the glass paper (Classic only).
+            if (!continuous) LyricPictures(controller, line = index)
+            Box(Modifier.fillMaxSize().background(paper))
             when {
                 item == null -> Message("Nothing playing", "Choose a song, then open its lyrics.", ink, quiet)
                 item.kind == MediaKind.LIVE -> Message("Live radio", "A station plays many songs, so it has no lyrics here. Choose a song to see its words.", ink, quiet)
@@ -489,3 +491,7 @@ private fun waitText(ms: Long): String {
 }
 
 private const val RETRY_SLACK_MS = 500L
+
+/** Classic's glass paper (Buxes): the light pane and the deep-blue pane the lines turn between. */
+private val GlassPaperLight = Color(0x40FFFFFF)
+private val GlassPaperDark = Color(0x8C0B3C9C)

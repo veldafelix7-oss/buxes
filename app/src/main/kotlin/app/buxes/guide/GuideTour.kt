@@ -51,7 +51,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.buxes.core.designsystem.shell.ShellPalette
-import app.buxes.core.designsystem.theme.CarbonColors
+import app.buxes.space.SpaceInk
 import app.buxes.core.designsystem.theme.BuxesTheme
 import app.buxes.core.designsystem.theme.Spacing
 import app.buxes.core.designsystem.type.BuxesText
@@ -78,7 +78,7 @@ fun GuideTour(guide: GuideState, palette: ShellPalette) {
 
 @Composable
 private fun TourScreen(step: GuideStep, guide: GuideState, palette: ShellPalette) = SpaceType {
-    val ink = CarbonColors
+    val ink = SpaceInk
     val passed = step in guide.passed
     LaunchedEffect(step, passed) {
         // Done on the model: a beat to see it worked, then the next checkpoint.
@@ -150,7 +150,7 @@ private fun TourScreen(step: GuideStep, guide: GuideState, palette: ShellPalette
 /** Six marks across the top: done ones lit, the current one half lit, the rest dark. */
 @Composable
 private fun Checkpoints(step: GuideStep, passed: Set<GuideStep>, modifier: Modifier) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     Row(
         modifier.semantics { contentDescription = step.counter.orEmpty() },
         horizontalArrangement = Arrangement.spacedBy(6.dp),

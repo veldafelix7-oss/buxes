@@ -19,7 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
-import app.buxes.core.designsystem.theme.CarbonColors
+import app.buxes.space.SpaceInk
 import app.buxes.core.designsystem.theme.BuxesTheme
 import app.buxes.core.designsystem.theme.Spacing
 import app.buxes.core.designsystem.tonal.ContinuousShape
@@ -34,7 +34,7 @@ import app.buxes.space.SpaceType
  */
 @Composable
 fun BoxScope.StickerEditorBar(space: BuxesSpaceState, editor: StickerEditorState, store: StickerStore) = SpaceType {
-    val ink = CarbonColors
+    val ink = SpaceInk
     val chosen = editor.selected
     Column(
         Modifier

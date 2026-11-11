@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-11
+
+### Changed
+- Lyrics: the black/white paper is now glass — a light pane and a deep-blue pane turning with the lines — with white words, over the song's pictures.
+- Lyrics: the covers of the playing song and the next songs turn behind the words, one picture per line (crossfade), on the Lyrics screen only.
+- The guide, the space panel, stickers and Help are blue glass with white words; strong keys are blue.
+- Settings: Finish, Glitter, Theme, Background, Display colour, Lyrics background and Contrast are gone — Buxes has one look.
+
+### Fixed
+- Leaving Lyrics no longer flashes bare blue; the cover glass stays beneath.
+
 ## [1.1.0] - 2026-11-11
 
 ### Changed

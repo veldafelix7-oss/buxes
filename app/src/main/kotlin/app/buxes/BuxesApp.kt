@@ -405,7 +405,19 @@ private fun titleOf(dest: Dest, graph: AppGraph): String = when (dest) {
 fun BuxesApp(graph: AppGraph, onSourceAction: (CapabilityAction) -> Unit, onTurnOff: () -> Unit = {}) {
     val appearance by graph.deviceSettings.appearance.collectAsStateWithLifecycle()
     val preview by graph.deviceSettings.preview.collectAsStateWithLifecycle()
-    val effective = preview ?: appearance
+    // Buxes has one look: blue glass, whatever an earlier build stored (the pickers are gone).
+    val effective = (preview ?: appearance).let {
+        it.copy(
+            preset = app.buxes.core.designsystem.shell.FinishPreset.GLASS,
+            display = DisplayTheme.GLASS,
+            glitter = app.buxes.core.designsystem.shell.Glitter(),
+            screen = it.screen.copy(
+                background = DisplayBackground.NONE,
+                lyricsBackground = app.buxes.core.designsystem.theme.LyricsBackground.AUTOMATIC,
+                contrast = app.buxes.core.designsystem.theme.TextContrast.STANDARD,
+            ),
+        )
+    }
     val displayImage by graph.displayImages.state.collectAsStateWithLifecycle()
     LaunchedEffect(effective.screen.imageUri) { graph.displayImages.show(effective.screen.imageUri) }
     // Buxes: on Glass, with no background of the listener's own, the playing song's cover — softened
@@ -1239,11 +1251,21 @@ private fun ScreenContent(
             graph.customSources, screen.id, screen.key, onDone = { navigator.pop() },
         )
         is Dest.MusicFolders -> MusicFoldersScreen(graph.musicFolders, screen.path, onOpen = { navigator.push(Dest.MusicFolders(it)) })
-        Dest.Appearance -> AppearanceScreen(
-            settings,
-            onDeviceBody = { navigator.push(Dest.DeviceBody) },
-            onVirtualDisplay = { navigator.push(Dest.VirtualDisplay) },
-        )
+        // Buxes: one look (blue glass). Appearance holds only the fonts and the lyrics style.
+        Dest.Appearance -> {
+            val image by graph.displayImages.state.collectAsStateWithLifecycle()
+            VirtualDisplayScreen(
+                settings,
+                imageStatus = image.status,
+                onTheme = {},
+                onFont = { navigator.push(Dest.Font) },
+                onLyricsFont = { navigator.push(Dest.LyricsFont) },
+                onLyricsTheme = { navigator.push(Dest.LyricsTheme) },
+                onBackground = {},
+                onBackgroundColor = {},
+                onLevel = {},
+            )
+        }
         Dest.DeviceBody -> DeviceBodyScreen(
             settings,
             onFinish = { navigator.push(Dest.Finish) },

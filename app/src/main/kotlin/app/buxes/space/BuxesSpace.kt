@@ -453,8 +453,11 @@ private fun Space(state: BuxesSpaceState, tint: Color, still: Boolean) {
                     center = Offset(size.width * 0.4f, size.height * 0.55f),
                     radius = diagonal * 0.65f,
                 )
+                // Buxes: the space is the blue room, not the dark; [tint] only deepens its far edge.
+                val room = Brush.verticalGradient(listOf(app.buxes.core.designsystem.theme.Atmosphere.BuxesBlue.top, app.buxes.core.designsystem.theme.Atmosphere.BuxesBlue.bottom))
                 onDrawBehind {
-                    drawRect(tint)
+                    drawRect(room)
+                    drawRect(tint, alpha = 0.18f)
                     drawRect(vignette)
                     val t = now / 1000f
                     val depth = state.depth.value.coerceIn(0f, 1f)

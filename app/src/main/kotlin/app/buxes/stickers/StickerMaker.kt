@@ -57,7 +57,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import app.buxes.core.designsystem.theme.CarbonColors
+import app.buxes.space.SpaceInk
 import app.buxes.core.designsystem.theme.BuxesTheme
 import app.buxes.core.designsystem.theme.Spacing
 import app.buxes.core.designsystem.tonal.ContinuousShape
@@ -94,7 +94,7 @@ fun StickerMaker(
 ) = SpaceType {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val ink = CarbonColors
+    val ink = SpaceInk
     var step by remember { mutableStateOf(MakerStep.LOADING) }
     var picture by remember { mutableStateOf<Bitmap?>(null) }
     val pictureImage = remember(picture) { picture?.asImageBitmap() }
@@ -191,7 +191,7 @@ fun StickerMaker(
     Column(
         Modifier
             .fillMaxSize()
-            .background(ink.canvas)
+            .background(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(app.buxes.core.designsystem.theme.Atmosphere.BuxesBlue.top, app.buxes.core.designsystem.theme.Atmosphere.BuxesBlue.bottom)))
             .pointerInput(Unit) { detectTapGestures { } } // nothing beneath is operated
             .windowInsetsPadding(WindowInsets.systemBars)
             .padding(Spacing.l),
@@ -364,7 +364,7 @@ private fun ColumnScope.CutControls(
     onNext: () -> Unit,
     enabled: Boolean,
 ) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     BuxesText(
         when (tool) {
             CutTool.SUBJECT -> "Tap what you want to keep."
@@ -417,7 +417,7 @@ private fun ColumnScope.BorderControls(
     onSave: () -> Unit,
     enabled: Boolean,
 ) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     val borders = listOf(StickerBorder.NONE to "Off", StickerBorder.BLACK to "Black", StickerBorder.WHITE to "White")
     SegmentedKeys(borders.map { it.second }, borders.indexOfFirst { it.first == border }, { onBorder(borders[it].first) }, Modifier.fillMaxWidth())
     Spacer(Modifier.height(Spacing.s))
@@ -446,7 +446,7 @@ private fun thicknessWord(t: Float) = when {
 /** A plain bar: the filled part lit, a round thumb; a touch or a drag sets it. */
 @Composable
 private fun ThicknessBar(value: Float, onValue: (Float) -> Unit) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     val set by rememberUpdatedState(onValue)
     Canvas(
         Modifier
