@@ -20,8 +20,8 @@ android {
         // Provisional: the product name is pending trademark clearance (docs/repository-audit.md §5).
         applicationId = "app.buxes"
         // A device test of the updater (D-99) builds a "newer" copy: -Pbuxes.versionCode=7 -Pbuxes.versionName=0.1.5.1
-        versionCode = providers.gradleProperty("buxes.versionCode").orNull?.toInt() ?: 4
-        versionName = providers.gradleProperty("buxes.versionName").orNull ?: "1.1.0"
+        versionCode = providers.gradleProperty("buxes.versionCode").orNull?.toInt() ?: 5
+        versionName = providers.gradleProperty("buxes.versionName").orNull ?: "1.2.0"
     }
     buildFeatures {
         buildConfig = true

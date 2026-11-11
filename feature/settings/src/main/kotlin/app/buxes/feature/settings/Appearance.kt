@@ -264,7 +264,9 @@ fun VirtualDisplayScreen(
     val shown = screen.backgroundFor(appearance.display)
     val rows = DisplayRow.entries.filter { row ->
         when (row) {
-            DisplayRow.Background, DisplayRow.BackgroundColor -> !ownDisplay
+            // Buxes: no theme, background or contrast choices; the look is one.
+            DisplayRow.Theme, DisplayRow.LyricsBackground, DisplayRow.TextContrast, DisplayRow.BackgroundOpacity, DisplayRow.NoBackground -> false
+            DisplayRow.Background, DisplayRow.BackgroundColor -> false
             DisplayRow.BackgroundOpacity -> !ownDisplay && shown == DisplayBackground.IMAGE
             DisplayRow.NoBackground -> ownDisplay
             // Classic's paper only (D-100): the line theme keeps its own black sheet.

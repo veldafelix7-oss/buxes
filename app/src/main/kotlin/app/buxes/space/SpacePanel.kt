@@ -52,7 +52,6 @@ import androidx.compose.ui.unit.dp
 import app.buxes.core.designsystem.component.pressFeedback
 import app.buxes.core.designsystem.symbol.BuxesSymbol
 import app.buxes.core.designsystem.symbol.Symbol
-import app.buxes.core.designsystem.theme.CarbonColors
 import app.buxes.core.designsystem.theme.LocalBuxesType
 import app.buxes.core.designsystem.theme.BuxesTheme
 import app.buxes.core.designsystem.theme.Spacing
@@ -144,7 +143,7 @@ private fun PageCard(
     help: @Composable ColumnScope.() -> Unit,
     onTurnOff: () -> Unit,
 ) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     Column(
         Modifier
             .fillMaxSize()
@@ -200,7 +199,7 @@ private fun PageCard(
  */
 @Composable
 private fun SpaceToggle(state: BuxesSpaceState, modifier: Modifier) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     Row(
         modifier
             .windowInsetsPadding(WindowInsets.systemBars)
@@ -224,7 +223,7 @@ private fun SpaceToggle(state: BuxesSpaceState, modifier: Modifier) {
 /** A row of keys where one is chosen (lit): the outside's segmented choice. */
 @Composable
 internal fun SegmentedKeys(labels: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     Row(
         modifier
             .height(40.dp)
@@ -239,7 +238,7 @@ internal fun SegmentedKeys(labels: List<String>, selected: Int, onSelect: (Int) 
                 Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .background(if (on) ink.labelPrimary.copy(alpha = 0.92f) else Color.Transparent, KeyShape)
+                    .background(if (on) KeyBlue else Color.Transparent, KeyShape)
                     .clickable(remember { MutableInteractionSource() }, indication = null) { onSelect(i) }
                     .semantics {
                         role = Role.Tab
@@ -247,7 +246,7 @@ internal fun SegmentedKeys(labels: List<String>, selected: Int, onSelect: (Int) 
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                BuxesText(label, BuxesTheme.type.caption, if (on) ink.canvas else ink.labelSecondary)
+                BuxesText(label, BuxesTheme.type.caption, if (on) Color.White else ink.labelSecondary)
             }
         }
     }
@@ -255,13 +254,13 @@ internal fun SegmentedKeys(labels: List<String>, selected: Int, onSelect: (Int) 
 
 @Composable
 private fun ToggleHalf(label: String, on: Boolean, onClick: () -> Unit) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     Box(
         Modifier
             .fillMaxHeight()
             .width(ToggleHalfWidth)
             .pressFeedback(0.95f)
-            .background(if (on) ink.labelPrimary.copy(alpha = 0.92f) else Color.Transparent, KeyShape)
+            .background(if (on) KeyBlue else Color.Transparent, KeyShape)
             .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onClick)
             .semantics {
                 role = Role.Tab
@@ -269,13 +268,13 @@ private fun ToggleHalf(label: String, on: Boolean, onClick: () -> Unit) {
             },
         contentAlignment = Alignment.Center,
     ) {
-        BuxesText(label, BuxesTheme.type.rowSecondary, if (on) ink.canvas else ink.labelSecondary)
+        BuxesText(label, BuxesTheme.type.rowSecondary, if (on) Color.White else ink.labelSecondary)
     }
 }
 
 @Composable
 private fun BackLink(onBack: () -> Unit) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     Row(
         Modifier
             .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onBack)
@@ -293,7 +292,7 @@ private fun BackLink(onBack: () -> Unit) {
 
 @Composable
 private fun Divider() {
-    Box(Modifier.fillMaxWidth().padding(vertical = Spacing.s).height(1.dp).background(CarbonColors.separator))
+    Box(Modifier.fillMaxWidth().padding(vertical = Spacing.s).height(1.dp).background(SpaceInk.separator))
 }
 
 @Composable
@@ -301,7 +300,7 @@ internal fun PanelTitle(text: String) {
     BuxesText(
         text,
         BuxesTheme.type.title,
-        CarbonColors.labelPrimary,
+        SpaceInk.labelPrimary,
         Modifier.padding(bottom = Spacing.s).semantics { heading() },
     )
 }
@@ -309,7 +308,7 @@ internal fun PanelTitle(text: String) {
 /** A row of the page: a label, a quiet line under it, a chevron. Touch only (the Wheel stays on the object). */
 @Composable
 internal fun PanelRow(label: String, detail: String? = null, enabled: Boolean = true, tint: Color? = null, chevron: Boolean = true, onClick: () -> Unit) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     Row(
         Modifier
             .fillMaxWidth()
@@ -329,26 +328,26 @@ internal fun PanelRow(label: String, detail: String? = null, enabled: Boolean = 
 /** The page's strong action: a flat key, lit ink on the page's dark. */
 @Composable
 internal fun PanelButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier, emphasized: Boolean = true, color: Color? = null) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     Box(
         modifier
             .fillMaxWidth()
             .heightIn(min = 44.dp)
             .pressFeedback(0.97f)
-            .background(if (emphasized) ink.labelPrimary.copy(alpha = 0.92f) else Color.Transparent, KeyShape)
+            .background(if (emphasized) KeyBlue else Color.Transparent, KeyShape)
             .border(1.dp, if (emphasized) Color.Transparent else ink.separator, KeyShape)
             .clickable(remember { MutableInteractionSource() }, indication = null, onClick = onClick)
             .semantics { role = Role.Button },
         contentAlignment = Alignment.Center,
     ) {
-        BuxesText(label, BuxesTheme.type.rowFocused, color ?: if (emphasized) ink.canvas else ink.labelPrimary)
+        BuxesText(label, BuxesTheme.type.rowFocused, color ?: if (emphasized) Color.White else ink.labelPrimary)
     }
 }
 
 /** A small outlined key (Return to Buxes at the page's top). */
 @Composable
 internal fun SmallKey(label: String, onClick: () -> Unit) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     Box(
         Modifier
             .pressFeedback(0.94f)
@@ -391,7 +390,7 @@ fun ColumnScope.HelpContent(onReplayGuide: () -> Unit) {
 
 @Composable
 private fun HelpSection(title: String, lines: List<Pair<String, String>>) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     val type = BuxesTheme.type
     BuxesText(title, type.sectionHeader, ink.labelSecondary, Modifier.padding(top = Spacing.s, bottom = Spacing.xs))
     for ((what, does) in lines) {

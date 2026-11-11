@@ -43,7 +43,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.buxes.core.designsystem.theme.CarbonColors
 import app.buxes.core.designsystem.theme.BuxesTheme
 import app.buxes.core.designsystem.theme.Spacing
 import app.buxes.core.designsystem.tonal.ContinuousShape
@@ -61,7 +60,7 @@ import kotlin.math.roundToInt
  */
 @Composable
 fun ColumnScope.StickerGallery(store: StickerStore, onAdd: () -> Unit, onOpen: (Sticker) -> Unit, onArrange: () -> Unit) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     val stickers by store.stickers.collectAsStateWithLifecycle()
     val placements by store.placements.collectAsStateWithLifecycle()
     val stuck = remember(placements) { placements.mapTo(HashSet()) { it.stickerId } }
@@ -101,7 +100,7 @@ fun ColumnScope.StickerDetail(
     onArrange: () -> Unit,
     onDeleted: () -> Unit,
 ) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     val stickers by store.stickers.collectAsStateWithLifecycle()
     val placements by store.placements.collectAsStateWithLifecycle()
     val sticker = stickers.firstOrNull { it.id == stickerId }
@@ -155,7 +154,7 @@ fun ColumnScope.StickerDetail(
 
 @Composable
 private fun AddTile(onAdd: () -> Unit) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     Column(
         Modifier
             .aspectRatio(1f)
@@ -186,7 +185,7 @@ private fun AddTile(onAdd: () -> Unit) {
 
 @Composable
 private fun StickerTile(store: StickerStore, sticker: Sticker, stuck: Boolean, onOpen: () -> Unit) {
-    val ink = CarbonColors
+    val ink = SpaceInk
     Column(
         Modifier
             .aspectRatio(1f)
