@@ -1,0 +1,73 @@
+package app.buxes.player.service
+
+import android.app.PendingIntent
+import android.content.Context
+import app.buxes.core.common.Clock
+import app.buxes.core.model.TrackId
+import app.buxes.player.api.AudioEffects
+import app.buxes.player.api.AutoplaySettings
+import app.buxes.player.api.QueueStore
+import app.buxes.player.api.RecommendationEngine
+import app.buxes.player.api.SleepTimer
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import app.buxes.player.api.TrackCatalog
+import app.buxes.sources.api.ArtworkResolver
+import app.buxes.sources.api.SourceHealthMonitor
+import app.buxes.sources.api.SourceRegistry
+import app.buxes.sources.api.resolve.EquivalenceStore
+import app.buxes.sources.api.resolve.StreamProviders
+import app.buxes.sources.api.resolve.StreamResolver
+
+/**
+ * What the playback service needs from the app's composition root (ADR-009). The Application
+ * implements [Provider]; the service never constructs sources itself.
+ */
+interface PlaybackDependencies {
+    val registry: SourceRegistry
+    val health: SourceHealthMonitor
+    val resolver: StreamResolver
+    val catalog: TrackCatalog
+    val artwork: ArtworkResolver
+    val clock: Clock
+
+    /** Where the queue is kept between runs (D-31); null keeps it in memory only. */
+    val queueStore: QueueStore? get() = null
+
+    /** Settings ▸ Autoplay (D-34). */
+    val autoplay: StateFlow<AutoplaySettings> get() = DefaultAutoplay
+
+    /** Settings ▸ Equaliser and Crossfade (D-76, D-77). */
+    val effects: StateFlow<AudioEffects> get() = DefaultEffects
+
+    /**
+     * Measures how what the player plays sounds, for the lyrics to move with (D-82, D-83); null: not
+     * measured. Only the main player is measured (crossfade's helper carries no position the UI reads).
+     */
+    val audioMeter: AudioMeter? get() = null
+
+    /** The sleep timer the listener sets (D-75); null: none. */
+    val sleepTimer: SleepTimer? get() = null
+
+    /** Suggestions for autoplay; null turns autoplay off. */
+    val recommendations: RecommendationEngine? get() = null
+
+    /** Copies already known to be the same recording on other sources (D-35), for autoplay's de-duplication. */
+    val equivalence: EquivalenceStore? get() = null
+
+    /** The listener's custom sources (D-91), the same ones the [resolver] asks: for their names and whether they serve. */
+    val streamProviders: StreamProviders get() = StreamProviders.None
+
+    /** Songs played since a time (for avoid-repeats), from ONLINE history. */
+    suspend fun playedSince(sinceMillis: Long): Set<TrackId> = emptySet()
+
+    /** Opens the app when the user taps the media notification. */
+    fun sessionActivity(context: Context): PendingIntent?
+
+    interface Provider {
+        val playbackDependencies: PlaybackDependencies
+    }
+}
+
+private val DefaultAutoplay: StateFlow<AutoplaySettings> = MutableStateFlow(AutoplaySettings(enabled = false))
+private val DefaultEffects: StateFlow<AudioEffects> = MutableStateFlow(AudioEffects())

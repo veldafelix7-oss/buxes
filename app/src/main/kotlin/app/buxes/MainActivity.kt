@@ -1,0 +1,174 @@
+package app.buxes
+
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Bundle
+import android.os.SystemClock
+import android.provider.Settings
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.withResumed
+import app.buxes.sources.api.CapabilityAction
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+
+class MainActivity : ComponentActivity() {
+
+    private val graph: AppGraph get() = (application as BuxesApplication).graph
+
+    private val asks by lazy { PermissionAsks(this) }
+
+    /** The permission being asked for, to read Android's answer about asking again. */
+    private var asking: String? = null
+
+    /** When the listener's own press asked (not Buxes's first-run ask), and when. */
+    private var pressedAt = 0L
+
+    private val requestPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        graph.onPermissionsChanged()
+        val permission = asking
+        asking = null
+        if (permission == null || granted) return@registerForActivityResult
+        val canAskAgain = shouldShowRequestPermissionRationale(permission)
+        asks.onAnswer(permission, granted = false, canAskAgain = canAskAgain)
+        // Refused at once, with no question shown: Android had already stopped asking. The press
+        // still leads somewhere: Buxes's page in the system settings.
+        val instant = pressedAt > 0 && SystemClock.elapsedRealtime() - pressedAt < NO_DIALOG_MS
+        if (!canAskAgain && instant) openAppSettings()
+        pressedAt = 0L
+    }
+
+    // Buxes's own text size and weight, whatever the phone's text settings (D-84).
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(newBase)
+        StandardText.override(newBase.resources.configuration)?.let(::applyOverrideConfiguration)
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
+        super.onCreate(savedInstanceState)
+        asking = savedInstanceState?.getString(KEY_ASKING)
+        graph.localPlayback.connect()
+        graph.startListening()
+        handleDebugIntent(intent, graph)
+        applyDebugWindowCommand(intent, this)
+        setContent {
+            BuxesApp(graph, onSourceAction = ::perform, onTurnOff = ::turnOff)
+        }
+        // Full screen (D-85): Android's bars hidden while the setting is on; a swipe from the edge
+        // shows them for a moment.
+        lifecycleScope.launch {
+            graph.deviceSettings.immersive.collect { applyImmersive(it) }
+        }
+        // Without music access, Buxes asks once by itself, as soon as it has switched on (the
+        // system's own question, over the device); after that, "Allow music access" on Home asks.
+        lifecycleScope.launch {
+            graph.power.first { it == Power.ON }
+            lifecycle.withResumed {
+                val permission = graph.localSource.permission
+                if (asks.shouldAskFirstTime(permission, graph.localSource.hasPermission())) {
+                    asks.onAsked(permission)
+                    ask(permission)
+                }
+            }
+        }
+    }
+
+    // Some phones bring the bars back when the window regains focus (a dialog, the shade): hide them again.
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) applyImmersive(graph.deviceSettings.immersive.value)
+    }
+
+    private fun applyImmersive(on: Boolean) {
+        val controller = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+        val bars = androidx.core.view.WindowInsetsCompat.Type.systemBars()
+        if (on) {
+            controller.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(bars)
+        } else {
+            controller.show(bars)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleDebugIntent(intent, graph)
+        applyDebugWindowCommand(intent, this)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // The user may have changed music access in system settings while we were away, or allowed
+        // media control, or installed the app that plays online music.
+        graph.recheckPermissions()
+        if (graph.localSource.hasPermission()) asks.onGranted(graph.localSource.permission)
+        graph.remotePlayback.refresh()
+        // Back from Android's page that lets Buxes install its update (D-99).
+        graph.updates.resumed()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        asking?.let { outState.putString(KEY_ASKING, it) }
+    }
+
+    private fun ask(permission: String) {
+        asking = permission
+        requestPermission.launch(permission)
+    }
+
+    /** Buxes's page in the system settings, where Permissions allows music access. */
+    private fun openAppSettings() {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null))
+        runCatching { startActivity(intent) }.onFailure { startActivity(Intent(Settings.ACTION_SETTINGS)) }
+    }
+
+    private fun perform(action: CapabilityAction) {
+        when (action) {
+            is CapabilityAction.RequestPermission -> {
+                val granted = checkSelfPermission(action.permission) == PackageManager.PERMISSION_GRANTED
+                // Android no longer shows the question: the system settings page is the only way.
+                if (asks.isBlocked(action.permission, granted)) {
+                    openAppSettings()
+                } else {
+                    pressedAt = SystemClock.elapsedRealtime()
+                    ask(action.permission)
+                }
+            }
+            is CapabilityAction.SignIn -> graph.onlineService.signIn()
+            is CapabilityAction.InstallApp -> graph.onlineService.installApp()
+        }
+    }
+
+    /**
+     * Turn off Buxes (D-56), after the goodbye: the music stopped, everything kept, the player's
+     * service stopped, the window gone from Recents, and then the process itself — a moment later,
+     * so the service can write down where playback stood.
+     */
+    private fun turnOff() {
+        graph.prepareToTurnOff()
+        finishAndRemoveTask()
+        stopService(Intent(this, app.buxes.player.service.PlaybackService::class.java))
+        val notifications = androidx.core.app.NotificationManagerCompat.from(applicationContext)
+        android.os.Handler(mainLooper).postDelayed({
+            // The paused player's notification goes with the service; make sure nothing is left.
+            notifications.cancelAll()
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }, TURN_OFF_GRACE_MS)
+    }
+
+    private companion object {
+        /** Long enough for the service's own goodbye (it saves the position, briefly). */
+        const val TURN_OFF_GRACE_MS = 1_200L
+
+        const val KEY_ASKING = "asking_permission"
+
+        /** An answer quicker than this came without a dialog (a person can't read and tap so fast). */
+        const val NO_DIALOG_MS = 350L
+    }
+}

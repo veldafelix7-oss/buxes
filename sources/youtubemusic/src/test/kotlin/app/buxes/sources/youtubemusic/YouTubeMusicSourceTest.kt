@@ -1,0 +1,577 @@
+package app.buxes.sources.youtubemusic
+
+import app.buxes.core.common.Outcome
+import app.buxes.core.common.BuxesError
+import app.buxes.core.model.AlbumId
+import app.buxes.core.model.ArtistId
+import app.buxes.core.model.ArtworkRef
+import app.buxes.core.model.AudioQuality
+import app.buxes.core.model.Codec
+import app.buxes.core.model.Explicitness
+import app.buxes.core.model.MediaKind
+import app.buxes.core.model.PlaybackRoute
+import app.buxes.core.model.PlaylistId
+import app.buxes.core.model.SourceId
+import app.buxes.core.model.SourceRef
+import app.buxes.core.model.Track
+import app.buxes.core.model.TrackId
+import app.buxes.sources.api.AuthState
+import app.buxes.sources.api.Capability
+import app.buxes.sources.api.CapabilityStatus
+import app.buxes.sources.api.CredentialStore
+import app.buxes.sources.api.FacetResolution
+import app.buxes.sources.api.InMemoryCredentialStore
+import app.buxes.sources.api.MissReason
+import app.buxes.sources.api.PlayableMedia
+import app.buxes.sources.api.PlaybackTarget
+import app.buxes.sources.api.Purpose
+import app.buxes.sources.api.QualityRequest
+import app.buxes.sources.api.RemoteContext
+import app.buxes.sources.api.SearchKind
+import app.buxes.sources.api.SearchQuery
+import app.buxes.sources.api.SetupProblem
+import app.buxes.sources.api.SignInResult
+import app.buxes.sources.api.WebSignIn
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import java.io.IOException
+import java.net.UnknownHostException
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+private fun ok(body: String) = HttpResponse(200, body.toByteArray())
+
+class YouTubeMusicSourceTest {
+
+    /** Answers by endpoint and request content; records what was sent. */
+    private class FakeService : HttpTransport {
+        data class Sent(val method: String, val url: String, val headers: Map<String, String>, val body: String)
+
+        val sent = mutableListOf<Sent>()
+        var answer: (Sent) -> HttpResponse = { HttpResponse(404, ByteArray(0)) }
+
+        override suspend fun send(method: String, url: String, headers: Map<String, String>, body: ByteArray?): HttpResponse {
+            val s = Sent(method, url, headers, body?.toString(Charsets.UTF_8).orEmpty())
+            sent += s
+            if (method == "GET" && url == "https://music.youtube.com/") return ok(Fixtures.PAGE_HTML)
+            return answer(s)
+        }
+
+        fun api(endpoint: String) = sent.filter { it.url.contains("/youtubei/v1/$endpoint?") }
+    }
+
+    private val service = FakeService()
+    private val credentials = InMemoryCredentialStore()
+    private val source by lazy { YouTubeMusicSource(credentials, service, { "TestBrowser/1.0" }, { "GB" }, { 1_700_000_000_000L }) }
+
+    private val session = "SID=abc; HSID=def; SAPISID=sapi-secret/123; __Secure-3PAPISID=sapi-secret/123"
+
+    @Test
+    fun `searching an artist's name lists their own albums and singles, not look-alikes`() = runTest {
+        service.answer = { s ->
+            when {
+                s.url.contains("/search?") && "SONGS-PARAMS" in s.body -> ok(Fixtures.searchSongs)
+                s.url.contains("/search?") -> ok(Fixtures.searchAll)
+                s.url.contains("/browse") && "UCnightowls" in s.body -> ok(Fixtures.artist)
+                else -> HttpResponse(404, ByteArray(0))
+            }
+        }
+        val results = (source.catalog.search(SearchQuery("Night  Owls")) as Outcome.Success).value
+        assertEquals(listOf("ytmusic|MPREb_dawn000", "ytmusic|MPREb_dusk000"), results.albums.map { it.id.value })
+        // The albums-only search wasn't needed.
+        assertTrue(service.sent.none { it.url.contains("/search?") && "ALBUMS-PARAMS" in it.body })
+    }
+
+    @Test
+    fun `search returns songs from the songs-only search and the other kinds from the main answer`() = runTest {
+        service.answer = { s ->
+            when {
+                s.url.contains("/search?") && "SONGS-PARAMS" in s.body -> ok(Fixtures.searchSongs)
+                s.url.contains("/search?") -> ok(Fixtures.searchAll)
+                else -> HttpResponse(404, ByteArray(0))
+            }
+        }
+        val results = (source.catalog.search(SearchQuery("night owls")) as Outcome.Success).value
+        assertEquals(listOf("ytmusic|aaaaaaaaaa1", "ytmusic|aaaaaaaaaa2"), results.tracks.map { it.id.value })
+        assertTrue(results.tracks.all { it.kind == MediaKind.SONG && it.routes == setOf(PlaybackRoute.DIRECT) })
+        assertEquals(listOf("ytmusic|vvvvvvvvvv1"), results.videos.map { it.id.value })
+        assertEquals(MediaKind.VIDEO, results.videos.single().kind)
+        assertEquals(listOf("ytmusic|MPREb_dawn000"), results.albums.map { it.id.value })
+        assertEquals(listOf("ytmusic|UCnightowls00000000000"), results.artists.map { it.id.value })
+        assertEquals(listOf("ytmusic|PLowls0001"), results.playlists.map { it.id.value })
+        // Episodes never show up as songs or videos.
+        assertTrue((results.tracks + results.videos).none { it.id.value.endsWith("eeeeeeeeee1") })
+        // The request carried the page's client version, the region, and no session.
+        val first = service.api("search").first()
+        assertTrue("1.20261005.01.00" in first.body)
+        assertTrue("\"gl\":\"GB\"" in first.body)
+        assertNull(first.headers["Authorization"])
+        assertNull(first.headers["Cookie"])
+        assertEquals("TestBrowser/1.0", first.headers["User-Agent"])
+    }
+
+    @Test
+    fun `more songs continue the songs-only search from where it stopped`() = runTest {
+        service.answer = { s ->
+            when {
+                "SONGS-TOKEN-1" in s.url -> ok(Fixtures.searchSongsMore)
+                s.url.contains("/search?") && "SONGS-PARAMS" in s.body -> ok(Fixtures.searchSongs)
+                s.url.contains("/search?") -> ok(Fixtures.searchAll)
+                else -> HttpResponse(404, ByteArray(0))
+            }
+        }
+        source.catalog.search(SearchQuery("night owls", limit = 2))
+        val more = (source.catalog.search(SearchQuery("night owls", limit = 2, offset = 2, kinds = setOf(SearchKind.TRACKS))) as Outcome.Success).value
+        assertEquals(listOf("ytmusic|aaaaaaaaaa3"), more.tracks.map { it.id.value })
+        // Without a filter from the answer, the encoded songs filter is used.
+        assertEquals("EgWKAQIIAQ%3D%3D", SearchFilter.SONGS.encoded())
+    }
+
+    @Test
+    fun `album songs inherit the album's artist, art and year`() = runTest {
+        service.answer = { s -> if ("MPREb_dawn000" in s.body) ok(Fixtures.album) else HttpResponse(404, ByteArray(0)) }
+        val album = (source.catalog.album(AlbumId("ytmusic|MPREb_dawn000")) as Outcome.Success).value
+        assertEquals("Dawn", album.summary.title)
+        assertEquals("Night Owls", album.summary.artistDisplay)
+        val first = album.tracks.first()
+        assertEquals("Night Owls", first.artistDisplay)
+        assertEquals(ArtistId("ytmusic|UCnightowls00000000000"), first.artists.single().id)
+        assertEquals("Dawn", first.album?.title)
+        assertNotNull(first.artwork)
+        assertEquals(2021, first.releaseDate?.year)
+        // An unplayable row says so.
+        assertIs<app.buxes.core.model.Availability.Unavailable>(album.tracks[1].availability)
+        // Songs play in Buxes: nothing is handed to another app.
+        assertNull(source.playback!!.remoteContext(RemoteContext.Collection(PlaylistId("ytmusic|MPREb_dawn000")), first))
+    }
+
+    @Test
+    fun `a playlist loads its continuation`() = runTest {
+        service.answer = { s ->
+            when {
+                "PL-TOKEN" in s.body -> ok(Fixtures.playlistMore)
+                "VLPLowls0001" in s.body -> ok(Fixtures.playlist)
+                else -> HttpResponse(404, ByteArray(0))
+            }
+        }
+        val playlist = (source.catalog.playlist(PlaylistId("ytmusic|PLowls0001")) as Outcome.Success).value
+        assertEquals(3, playlist.tracks.size)
+        assertEquals("Owl songs", playlist.summary.title)
+        assertFalse(playlist.summary.isAlbum)
+    }
+
+    @Test
+    fun `home shelves become shelves of songs, albums and artists`() = runTest {
+        service.answer = { s ->
+            when {
+                "HOME-TOKEN" in s.url -> ok(Fixtures.homeMore)
+                "FEmusic_home" in s.body -> ok(Fixtures.home)
+                else -> HttpResponse(404, ByteArray(0))
+            }
+        }
+        val shelves = (source.discovery!!.shelves() as Outcome.Success).value
+        assertEquals(listOf("Quick picks", "Albums for you", "Recommended artists"), shelves.map { it.title })
+        assertEquals(1, shelves[0].tracks.size)
+        assertTrue(shelves[1].playlists.single().isAlbum)
+        assertEquals("Night Owls", shelves[2].artists.single().name)
+        val page = (source.discovery!!.shelf(shelves[0].id, 0, 10) as Outcome.Success).value
+        assertEquals(1, page.tracks.size)
+        // Genres aren't offered: no Explore.
+        assertEquals(emptyList(), (source.discovery!!.genres() as Outcome.Success).value)
+    }
+
+    @Test
+    fun `radio follows the catalogue's own radio and leaves out the seed and exclusions`() = runTest {
+        service.answer = { s ->
+            when {
+                "RADIO-TOKEN" in s.url -> ok(Fixtures.radioMore)
+                "RDAMVMaaaaaaaaaa1" in s.body -> ok(Fixtures.radio)
+                else -> HttpResponse(404, ByteArray(0))
+            }
+        }
+        val seed = (source.catalog.search(SearchQuery("x")) as? Outcome.Success)?.value?.tracks?.firstOrNull()
+            ?: YouTubeMusicMapper(YouTubeMusicSource.SOURCE_ID).track(YtmSong("aaaaaaaaaa1", "First Light", emptyList()))
+        val related = (source.recommendations!!.related(listOf(seed), 5, setOf(TrackId("ytmusic|cccccccccc1"))) as Outcome.Success).value
+        assertEquals(listOf("ytmusic|bbbbbbbbbb1"), related.map { it.id.value })
+    }
+
+    @Test
+    fun `every song resolves directly as a stream, download is not permitted`() = runTest {
+        val fakeResolver = object : YouTubeMusicStreamResolver(
+            YouTubeMusicSource.SOURCE_ID,
+            YouTubeMusicDownloader({ "TestBrowser/1.0" })
+        ) {
+            override suspend fun resolve(track: Track, quality: QualityRequest): FacetResolution {
+                return FacetResolution.Resolved(
+                    PlaybackTarget.DirectStream(
+                        trackId = track.id,
+                        media = PlayableMedia(
+                            uri = "https://rr---sn.googlevideo.com/videoplayback?expire=1700021600",
+                            mimeType = "audio/webm",
+                            claimedQuality = AudioQuality(
+                                codec = Codec.OPUS,
+                                container = "webm",
+                                bitrateKbps = 160,
+                                sampleRateHz = 48_000,
+                                channels = 2,
+                            ),
+                            durationMs = 210_000L,
+                            expiresAtMillis = 1700021600000L,
+                            headers = emptyMap(),
+                            sourceId = YouTubeMusicSource.SOURCE_ID,
+                            cacheKey = "${track.id.value}|251",
+                        ),
+                    ),
+                )
+            }
+        }
+        val customSource = YouTubeMusicSource(
+            credentials,
+            service,
+            { "TestBrowser/1.0" },
+            { "GB" },
+            { 1_700_000_000_000L },
+            fakeResolver,
+        )
+
+        val track = YouTubeMusicMapper(YouTubeMusicSource.SOURCE_ID).track(YtmSong("aaaaaaaaaa1", "First Light", emptyList()))
+        val resolved = customSource.playback.resolve(track, QualityRequest.Maximum, Purpose.PLAYBACK)
+        val target = assertIs<PlaybackTarget.DirectStream>(assertIs<FacetResolution.Resolved>(resolved).target)
+        assertEquals("https://rr---sn.googlevideo.com/videoplayback?expire=1700021600", target.media.uri)
+        assertEquals("audio/webm", target.media.mimeType)
+        assertEquals(160, target.media.claimedQuality?.bitrateKbps)
+        assertEquals(Codec.OPUS, target.media.claimedQuality?.codec)
+        assertEquals(FacetResolution.Miss(MissReason.NOT_PERMITTED), customSource.playback.resolve(track, QualityRequest.Maximum, Purpose.DOWNLOAD))
+        assertTrue(customSource.capabilities.value.isUsable(Capability.DIRECT_STREAM))
+        assertFalse(customSource.capabilities.value.isUsable(Capability.REMOTE_PLAYBACK), "nothing is handed to another app")
+        assertNull(customSource.playback.remoteTrackKey("aaaaaaaaaa1"))
+        // A first extraction gets more time than a lookup before it counts as a failure.
+        assertEquals(YouTubeMusicSource.RESOLVE_TIMEOUT_MS, customSource.playback.resolveTimeoutMillis)
+        val foreignTrack = track.copy(id = TrackId.of(SourceId("local"), "123"), source = SourceRef(SourceId("local"), "123"))
+        assertEquals(FacetResolution.Miss(MissReason.NO_SOURCE), customSource.playback.resolve(foreignTrack, QualityRequest.Maximum, Purpose.PLAYBACK))
+    }
+
+    @Test
+    fun `signing in checks the session, keeps it sealed in the store and signs every request`() = runTest {
+        service.answer = { s ->
+            when {
+                s.url.contains("account/account_menu") -> ok(Fixtures.accountMenu)
+                s.url.contains("/browse?") && "VLLM" in s.body -> ok(Fixtures.playlist)
+                else -> HttpResponse(404, ByteArray(0))
+            }
+        }
+        assertEquals(AuthState.SignedOut, source.auth!!.state.value)
+        assertEquals(CapabilityStatus.REQUIRES_SIGN_IN, source.capabilities.value[Capability.ACCOUNT_LIBRARY].status)
+        val result = source.auth!!.signIn(mapOf(WebSignIn.SESSION_KEY to session))
+        assertEquals(SignInResult.SignedIn, result)
+        val state = assertIs<AuthState.SignedIn>(source.auth!!.state.value)
+        assertEquals("Listener Name", state.accountName)
+        assertTrue(state.accountKey.startsWith("ytm-"))
+        assertFalse("Listener" in state.accountKey)
+        assertEquals(session.split("; ").sorted(), credentials.read(YouTubeMusicSource.SOURCE_ID)!!["session"]!!.split("; ").sorted())
+        assertTrue(source.capabilities.value.isUsable(Capability.ACCOUNT_LIBRARY))
+
+        val liked = (source.accountLibrary!!.likedSongs(0, 10) as Outcome.Success).value
+        assertEquals(2, liked.size)
+        val signed = service.api("browse").last()
+        assertEquals("SAPISIDHASH 1700000000_6a8d14d447d77ae944b9faea81d07b445bbc692a", signed.headers["Authorization"])
+        assertTrue(signed.headers["Cookie"]!!.contains("SAPISID=sapi-secret/123"))
+    }
+
+    @Test
+    fun `a session the service no longer accepts expires and is forgotten`() = runTest {
+        credentials.write(YouTubeMusicSource.SOURCE_ID, mapOf("session" to session, "account-name" to "Listener Name"))
+        service.answer = { ok(Fixtures.signedOutAnswer) }
+        assertIs<AuthState.SignedIn>(source.auth!!.state.value)
+        val r = source.accountLibrary!!.likedSongs(0, 10)
+        assertIs<BuxesError.AuthExpired>((r as Outcome.Failure).error)
+        assertEquals(AuthState.Expired, source.auth!!.state.value)
+        assertNull(credentials.read(YouTubeMusicSource.SOURCE_ID))
+        assertEquals(CapabilityStatus.REQUIRES_SIGN_IN, source.capabilities.value[Capability.LIKES].status)
+    }
+
+    @Test
+    fun `a refused sign-in keeps nothing`() = runTest {
+        service.answer = { HttpResponse(401, ByteArray(0)) }
+        val result = source.auth!!.signIn(mapOf(WebSignIn.SESSION_KEY to session))
+        assertIs<SignInResult.Refused>(result)
+        assertNull(credentials.read(YouTubeMusicSource.SOURCE_ID))
+        assertEquals(AuthState.SignedOut, source.auth!!.state.value)
+        // A session without its API secret is refused before anything is sent.
+        val before = service.sent.size
+        assertIs<SignInResult.Refused>(source.auth!!.signIn(mapOf(WebSignIn.SESSION_KEY to "SID=abc")))
+        assertEquals(before, service.sent.size)
+    }
+
+    @Test
+    fun `a sign-in the caller gives up on leaves the account as it was, never stuck signing in`() = runTest {
+        val stalled = object : HttpTransport {
+            override suspend fun send(method: String, url: String, headers: Map<String, String>, body: ByteArray?): HttpResponse {
+                if (method == "GET") return ok(Fixtures.PAGE_HTML)
+                awaitCancellation() // the account check never answers
+            }
+        }
+        val stalledSource = YouTubeMusicSource(credentials, stalled, { "TestBrowser/1.0" }, { "GB" }, { 1_700_000_000_000L })
+        val check = launch { stalledSource.auth!!.signIn(mapOf(WebSignIn.SESSION_KEY to session)) }
+        runCurrent()
+        assertEquals(AuthState.SigningIn, stalledSource.auth!!.state.value)
+        check.cancelAndJoin() // the sign-in screen closed
+        assertEquals(AuthState.SignedOut, stalledSource.auth!!.state.value)
+        assertNull(credentials.read(YouTubeMusicSource.SOURCE_ID))
+    }
+
+    @Test
+    fun `a failed sign-in while signed in keeps the account that was signed in`() = runTest {
+        credentials.write(YouTubeMusicSource.SOURCE_ID, mapOf("session" to session, "account-name" to "Listener Name"))
+        service.answer = { HttpResponse(503, ByteArray(0)) }
+        val before = assertIs<AuthState.SignedIn>(source.auth!!.state.value)
+        val result = assertIs<SignInResult.Refused>(source.auth!!.signIn(mapOf(WebSignIn.SESSION_KEY to "SAPISID=other-secret")))
+        assertEquals(SetupProblem.UNREACHABLE, result.problem)
+        assertEquals(before, source.auth!!.state.value)
+        assertEquals(session, credentials.read(YouTubeMusicSource.SOURCE_ID)!!["session"])
+    }
+
+    @Test
+    fun `a failed sign-in after the session expired still asks to sign in again`() = runTest {
+        credentials.write(YouTubeMusicSource.SOURCE_ID, mapOf("session" to session, "account-name" to "Listener Name"))
+        service.answer = { ok(Fixtures.signedOutAnswer) }
+        source.accountLibrary!!.likedSongs(0, 10)
+        assertEquals(AuthState.Expired, source.auth!!.state.value)
+        service.answer = { HttpResponse(503, ByteArray(0)) }
+        assertIs<SignInResult.Refused>(source.auth!!.signIn(mapOf(WebSignIn.SESSION_KEY to session)))
+        assertEquals(AuthState.Expired, source.auth!!.state.value)
+    }
+
+    @Test
+    fun `a session the phone can't seal is refused and nothing is kept`() = runTest {
+        val broken = object : CredentialStore {
+            override fun read(source: SourceId): Map<String, String>? = null
+            override fun write(source: SourceId, values: Map<String, String>) = throw java.security.KeyStoreException("no key")
+            override fun delete(source: SourceId) = Unit
+        }
+        service.answer = { s -> if (s.url.contains("account/account_menu")) ok(Fixtures.accountMenu) else HttpResponse(404, ByteArray(0)) }
+        val unsealable = YouTubeMusicSource(broken, service, { "TestBrowser/1.0" }, { "GB" }, { 1_700_000_000_000L })
+        val result = assertIs<SignInResult.Refused>(unsealable.auth!!.signIn(mapOf(WebSignIn.SESSION_KEY to session)))
+        assertEquals(SetupProblem.UNKNOWN, result.problem)
+        assertEquals(AuthState.SignedOut, unsealable.auth!!.state.value)
+        assertIs<BuxesError.AuthRequired>((unsealable.accountLibrary!!.likedSongs(0, 10) as Outcome.Failure).error)
+    }
+
+    @Test
+    fun `when the page redirects a request without cookies, its settings are read with the session`() = runTest {
+        val sent = mutableListOf<Pair<String, Map<String, String>>>()
+        val consenting = object : HttpTransport {
+            override suspend fun send(method: String, url: String, headers: Map<String, String>, body: ByteArray?): HttpResponse {
+                sent += url to headers
+                return when {
+                    method == "GET" && headers["Cookie"] == null -> HttpResponse(302, ByteArray(0)) // to a consent page
+                    method == "GET" -> ok(Fixtures.PAGE_HTML)
+                    url.contains("account/account_menu") -> ok(Fixtures.accountMenu)
+                    else -> HttpResponse(404, ByteArray(0))
+                }
+            }
+        }
+        val regional = YouTubeMusicSource(credentials, consenting, { "TestBrowser/1.0" }, { "DE" }, { 1_700_000_000_000L })
+        assertEquals(SignInResult.SignedIn, regional.auth!!.signIn(mapOf(WebSignIn.SESSION_KEY to session)))
+        val pages = sent.filter { it.first == "https://music.youtube.com/" }
+        assertEquals(2, pages.size)
+        assertNull(pages[0].second["Cookie"])
+        assertTrue(pages[1].second["Cookie"]!!.contains("SAPISID=sapi-secret/123"))
+        // The account check went out as the version the page reported, not the built-in fallback.
+        assertEquals("1.20261005.01.00", sent.last { it.first.contains("account/account_menu") }.second["X-Youtube-Client-Version"])
+    }
+
+    @Test
+    fun `signing out forgets the session and the account's lists`() = runTest {
+        credentials.write(YouTubeMusicSource.SOURCE_ID, mapOf("session" to session, "account-name" to "Listener Name"))
+        source.auth!!.signOut()
+        assertEquals(AuthState.SignedOut, source.auth!!.state.value)
+        assertNull(credentials.read(YouTubeMusicSource.SOURCE_ID))
+        assertIs<BuxesError.AuthRequired>((source.accountLibrary!!.likedSongs(0, 10) as Outcome.Failure).error)
+    }
+
+    @Test
+    fun `library playlists leave out liked music, which has its own place`() = runTest {
+        credentials.write(YouTubeMusicSource.SOURCE_ID, mapOf("session" to session, "account-name" to "Listener Name"))
+        service.answer = { s -> if ("FEmusic_liked_playlists" in s.body) ok(Fixtures.libraryPlaylists) else HttpResponse(404, ByteArray(0)) }
+        val playlists = (source.accountLibrary!!.playlists(0, 10) as Outcome.Success).value
+        assertEquals(listOf("Road trip"), playlists.map { it.title })
+    }
+
+    @Test
+    fun `history keeps the service's grouping`() = runTest {
+        credentials.write(YouTubeMusicSource.SOURCE_ID, mapOf("session" to session, "account-name" to "Listener Name"))
+        service.answer = { s -> if ("FEmusic_history" in s.body) ok(Fixtures.history) else HttpResponse(404, ByteArray(0)) }
+        val history = (source.accountLibrary!!.history(0, 10) as Outcome.Success).value
+        assertEquals(listOf("Today", "Yesterday"), history.map { it.period })
+    }
+
+    @Test
+    fun `likes write to the account`() = runTest {
+        credentials.write(YouTubeMusicSource.SOURCE_ID, mapOf("session" to session, "account-name" to "Listener Name"))
+        service.answer = { ok("""{"responseContext":{}}""") }
+        val track = YouTubeMusicMapper(YouTubeMusicSource.SOURCE_ID).track(YtmSong("aaaaaaaaaa1", "First Light", emptyList(), explicit = true))
+        assertEquals(Explicitness.EXPLICIT, track.explicitness)
+        assertIs<Outcome.Success<Unit>>(source.accountLibrary!!.setLiked(track, true))
+        assertIs<Outcome.Success<Unit>>(source.accountLibrary!!.setLiked(track, false))
+        assertEquals(1, service.api("like/like").size)
+        assertEquals(1, service.api("like/removelike").size)
+        assertTrue("\"videoId\":\"aaaaaaaaaa1\"" in service.api("like/like").single().body)
+    }
+
+    @Test
+    fun `failures are classified, never thrown`() = runTest {
+        service.answer = { HttpResponse(429, ByteArray(0), retryAfterSeconds = 30) }
+        assertEquals(BuxesError.RateLimited(30_000), (source.catalog.search(SearchQuery("x")) as Outcome.Failure).error)
+        service.answer = { HttpResponse(503, ByteArray(0)) }
+        assertEquals(BuxesError.Server(503), (source.catalog.search(SearchQuery("x")) as Outcome.Failure).error)
+        service.answer = { ok("not json") }
+        assertEquals(BuxesError.Server(null), (source.catalog.search(SearchQuery("x")) as Outcome.Failure).error)
+        service.answer = { throw IOException("SocketTimeoutException") }
+        assertIs<BuxesError.Network>((source.catalog.search(SearchQuery("x")) as Outcome.Failure).error)
+        service.answer = { throw UnknownHostException() }
+        assertEquals(BuxesError.Offline, (source.catalog.search(SearchQuery("x")) as Outcome.Failure).error)
+    }
+
+    @Test
+    fun `a stale client version is refreshed once from the page`() = runTest {
+        var calls = 0
+        service.answer = { calls++; if (calls == 1) HttpResponse(400, ByteArray(0)) else ok(Fixtures.searchNothing) }
+        assertIs<Outcome.Success<*>>(source.catalog.search(SearchQuery("x", kinds = setOf(SearchKind.ARTISTS))))
+        assertEquals(2, service.sent.count { it.method == "GET" && it.url == "https://music.youtube.com/" })
+    }
+
+    @Test
+    fun `artwork is fetched at the requested size from the image host`() = runTest {
+        service.answer = { s -> if (s.method == "POST") HttpResponse(404, ByteArray(0)) else ok("JPEGDATA") }
+        val ref = ArtworkRef(YouTubeMusicSource.SOURCE_ID, "https://lh3.googleusercontent.com/abc=w120-h120-l90-rj")
+        assertNotNull(source.artwork!!.load(ref, 300))
+        assertEquals("https://lh3.googleusercontent.com/abc=w300-h300-l90-rj", service.sent.last().url)
+        assertNull(service.sent.last().headers["Cookie"])
+    }
+
+    // --- Channels (D-86) -------------------------------------------------------------------------------
+
+    private fun signedInWithChannels(ishmaMenu: String = Fixtures.accountMenuIshma) {
+        credentials.write(YouTubeMusicSource.SOURCE_ID, mapOf("session" to session, "account-name" to "Listener Name", "account-key" to YouTubeMusicSource.accountKeyOf("@listener")))
+        service.answer = { s ->
+            when {
+                s.url.contains("account/accounts_list") -> ok(Fixtures.accountsList)
+                s.url.contains("account/account_menu") && "onBehalfOfUser" in s.body -> ok(ishmaMenu)
+                s.url.contains("account/account_menu") -> ok(Fixtures.accountMenu)
+                s.url.contains("/browse?") && "VLLM" in s.body -> ok(Fixtures.playlist)
+                else -> HttpResponse(404, ByteArray(0))
+            }
+        }
+    }
+
+    @Test
+    fun `the account's channels are listed, its own channel chosen`() = runTest {
+        signedInWithChannels()
+        val channels = (source.auth!!.refreshIdentities() as Outcome.Success).value
+        assertEquals(listOf("own", "112233445566778899001", "998877665544332211000"), channels.map { it.id })
+        assertEquals(listOf(true, false, false), channels.map { it.selected })
+        assertEquals(channels, source.auth!!.identities.value)
+        // The list is asked as the account itself.
+        assertFalse("onBehalfOfUser" in service.api("account/accounts_list").single().body)
+    }
+
+    @Test
+    fun `channels only the music page's own switcher lists are found too (issue #4)`() = runTest {
+        credentials.write(YouTubeMusicSource.SOURCE_ID, mapOf("session" to session, "account-name" to "crowdstrike", "account-key" to YouTubeMusicSource.accountKeyOf("@crowdstrike")))
+        service.answer = { s ->
+            when {
+                s.url.contains("account/accounts_list") -> ok(Fixtures.accountsListOwnOnly)
+                s.url.endsWith("/getAccountSwitcherEndpoint") -> ok(Fixtures.accountSwitcher)
+                else -> HttpResponse(404, ByteArray(0))
+            }
+        }
+        val channels = (source.auth!!.refreshIdentities() as Outcome.Success).value
+        assertEquals(listOf("crowdstrike", "ishmaboy"), channels.map { it.name })
+        assertEquals(listOf(true, false), channels.map { it.selected })
+        val switcher = service.sent.last { it.url.endsWith("/getAccountSwitcherEndpoint") }
+        assertEquals("GET", switcher.method)
+        assertNotNull(switcher.headers["Cookie"], "asked with the session")
+        // When the first list already has several, the second isn't asked.
+        signedInWithChannels()
+        val before = service.sent.size
+        source.auth!!.refreshIdentities()
+        assertTrue(service.sent.drop(before).none { it.url.endsWith("/getAccountSwitcherEndpoint") })
+    }
+
+    @Test
+    fun `choosing a channel acts as it from then on, and its library is its own`() = runTest {
+        signedInWithChannels()
+        val before = assertIs<AuthState.SignedIn>(source.auth!!.state.value)
+        source.auth!!.refreshIdentities()
+        assertEquals(Outcome.Success(Unit), source.auth!!.selectIdentity("112233445566778899001"))
+
+        val after = assertIs<AuthState.SignedIn>(source.auth!!.state.value)
+        assertEquals("ishmaboy", after.accountName)
+        assertTrue(after.accountKey != before.accountKey, "each channel's things are kept apart")
+        assertEquals(listOf(false, true, false), source.auth!!.identities.value.map { it.selected })
+        assertEquals("112233445566778899001", credentials.read(YouTubeMusicSource.SOURCE_ID)!!["page-id"])
+        assertEquals("ishmaboy", credentials.read(YouTubeMusicSource.SOURCE_ID)!!["account-name"])
+
+        source.accountLibrary!!.likedSongs(0, 10)
+        assertTrue("\"onBehalfOfUser\":\"112233445566778899001\"" in service.api("browse").last().body)
+
+        // After a restart it is still that channel.
+        val again = YouTubeMusicSource(credentials, service, { "TestBrowser/1.0" }, { "GB" }, { 1_700_000_000_000L })
+        assertEquals(after, again.auth!!.state.value)
+        again.accountLibrary!!.likedSongs(0, 10)
+        assertTrue("\"onBehalfOfUser\":\"112233445566778899001\"" in service.api("browse").last().body)
+
+        // And back to the account's own channel: the same key as before.
+        source.auth!!.selectIdentity("own")
+        assertEquals(before, source.auth!!.state.value)
+        assertNull(credentials.read(YouTubeMusicSource.SOURCE_ID)!!["page-id"])
+        source.accountLibrary!!.likedSongs(0, 10)
+        assertFalse("onBehalfOfUser" in service.api("browse").last().body)
+    }
+
+    @Test
+    fun `a channel the service won't act as is not kept`() = runTest {
+        // Asked as the channel, the service answers as the account's own.
+        signedInWithChannels(ishmaMenu = Fixtures.accountMenu)
+        val before = source.auth!!.state.value
+        source.auth!!.refreshIdentities()
+        val r = source.auth!!.selectIdentity("112233445566778899001")
+        assertIs<BuxesError.Unsupported>((r as Outcome.Failure).error)
+        assertEquals(before, source.auth!!.state.value)
+        assertNull(credentials.read(YouTubeMusicSource.SOURCE_ID)!!["page-id"])
+        assertEquals(listOf(true, false, false), source.auth!!.identities.value.map { it.selected })
+    }
+
+    @Test
+    fun `a refused channel list or switch never signs the account out`() = runTest {
+        signedInWithChannels()
+        source.auth!!.refreshIdentities()
+        service.answer = { HttpResponse(403, ByteArray(0)) }
+        assertIs<Outcome.Failure>(source.auth!!.refreshIdentities())
+        assertIs<Outcome.Failure>(source.auth!!.selectIdentity("112233445566778899001"))
+        assertIs<AuthState.SignedIn>(source.auth!!.state.value)
+        assertNotNull(credentials.read(YouTubeMusicSource.SOURCE_ID))
+    }
+
+    @Test
+    fun `signing out forgets the channel`() = runTest {
+        signedInWithChannels()
+        source.auth!!.refreshIdentities()
+        source.auth!!.selectIdentity("112233445566778899001")
+        source.auth!!.signOut()
+        assertTrue(source.auth!!.identities.value.isEmpty())
+        // Signing in again starts at the account's own channel.
+        assertEquals(SignInResult.SignedIn, source.auth!!.signIn(mapOf(WebSignIn.SESSION_KEY to session)))
+        assertEquals("Listener Name", (source.auth!!.state.value as AuthState.SignedIn).accountName)
+        assertFalse("onBehalfOfUser" in service.api("account/account_menu").last().body)
+    }
+}

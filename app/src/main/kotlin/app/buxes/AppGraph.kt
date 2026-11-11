@@ -1,0 +1,377 @@
+package app.buxes
+
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import app.buxes.core.common.Clock
+import app.buxes.core.common.DiskActivity
+import app.buxes.core.database.DatabaseEquivalenceStore
+import app.buxes.core.database.DatabaseFavorites
+import app.buxes.core.database.DatabaseQueueStore
+import app.buxes.core.database.LibraryStore
+import app.buxes.core.database.LocalPlaylistStore
+import app.buxes.core.database.OnlineLibraryStore
+import app.buxes.core.database.BuxesDatabase
+import app.buxes.core.designsystem.shell.BatteryLevel
+import app.buxes.core.model.SourceId
+import app.buxes.player.api.AutoplaySettings
+import app.buxes.player.api.PlayIntent
+import app.buxes.player.api.SourceRecommendationEngine
+import app.buxes.player.api.SleepTimer
+import app.buxes.player.api.TrackCatalog
+import app.buxes.player.service.BuildConfigFlags
+import app.buxes.player.service.MediaControllerPlaybackController
+import app.buxes.player.service.PlaybackDependencies
+import app.buxes.player.service.SystemVolumeController
+import app.buxes.sources.api.ArtworkResolver
+import app.buxes.sources.api.SourceHealthMonitor
+import app.buxes.sources.api.MusicEnvironment
+import app.buxes.sources.api.SourceRegistry
+import app.buxes.sources.api.SourceSettings
+import app.buxes.sources.api.matching.TrackMatcher
+import app.buxes.sources.api.resolve.StreamResolver
+import app.buxes.sources.local.LocalMusicSource
+import app.buxes.sources.youtubemusic.YouTubeMusicSource
+import app.buxes.player.api.OwnerAwarePlaybackController
+import app.buxes.player.remote.MediaSessionRemotePlayback
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+
+/**
+ * The composition root (ADR-009): every long-lived object is built here, once. Nothing below this
+ * file knows which concrete sources exist.
+ */
+class AppGraph(val context: Context) {
+    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    val clock: Clock = Clock.System
+
+    val health = SourceHealthMonitor(clock)
+    val registry = SourceRegistry(health)
+    val matcher = TrackMatcher()
+    /** The library database (ADR-004, D-31): library cache, favorites, the saved queue. */
+    val database = BuxesDatabase.create(context)
+
+    /**
+     * Which copies on different sources are the same recording (D-35, D-36): EXACT matches learnt from
+     * searches and the listener's "not the same song", kept across restarts; used to play a twin.
+     */
+    val equivalence = DatabaseEquivalenceStore(database, appScope).also { store -> appScope.launch { store.load() } }
+
+    /** Secrets for sources the listener signs in to (D-37): sealed with a Keystore key, never logged. */
+    val credentials = KeystoreCredentialStore(context)
+
+    /**
+     * Custom sources (D-91): addons the listener added for their streams. Asked first, in their order,
+     * for an EXACT copy of an online song; the song's own source is the fallback. Never in the registry.
+     */
+    val customSources = CustomSources(credentials, health, appScope, clock::nowMillis)
+    val resolver = StreamResolver(registry, health, matcher, clock, equivalence = equivalence, preferred = customSources)
+
+    val libraryStore = LibraryStore(database)
+    val catalog = TrackCatalog(registry) { id -> libraryStore.track(id) }
+
+    /** A song with its album's and artists' pages, looked up on its source when a list left them out (D-79, D-80). */
+    val songPages = SongPages(catalog, registry, appScope)
+    val queueStore = DatabaseQueueStore(database)
+    val artwork = ArtworkResolver(registry)
+
+    val localSource = LocalMusicSource(context, appScope)
+
+    /** Which sources are on (D-35): stored, applied once every source is registered. */
+    val sourceSettings = SourceSettings(registry, SharedPrefsSourcePreferences(context))
+
+    /** Where Buxes hands YouTube Music songs to play (YOUTUBE_MUSIC_ARCHITECTURE §8): the official app. */
+    val remotePlayback = MediaSessionRemotePlayback(
+        context,
+        appScope,
+        YouTubeMusicSource.PROVIDER_APP_PACKAGE,
+        returnToBuxes = {
+            if (deviceSettings.stayInBuxes.value) Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT) else null
+        },
+    )
+
+    /**
+     * ONLINE (D-38, D-48): YouTube Music — its catalogue and the listener's account read here, its
+     * songs played by Buxes itself. The device's own browser user agent, warmed off the main thread.
+     */
+    /**
+     * Buxes's own updates (D-99): GitHub's newest release, offered in a notice; installed through
+     * Android's installer once it's checked to be this app, newer, and signed by the same key. Release
+     * builds check by themselves; debug builds (another package) only open the release's page.
+     */
+    internal val updates = app.buxes.update.UpdateCenter(
+        net = app.buxes.update.HttpsUpdateNet("Buxes/${BuildConfig.VERSION_NAME} (update check)"),
+        store = app.buxes.update.PrefsUpdateStore(context),
+        installer = app.buxes.update.PackageUpdateInstaller(context),
+        current = app.buxes.update.Version.of(BuildConfig.VERSION_NAME) ?: app.buxes.update.Version(listOf(0), "0"),
+        downloads = java.io.File(context.cacheDir, "updates"),
+        scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO),
+        checksByItself = !BuildConfig.DEBUG,
+        canInstallReleases = !BuildConfig.DEBUG,
+    )
+
+    /** Runs the online source's player script for its backup apps (D-98), off the app's own process. */
+    internal val scriptEngine = AndroidScriptEngine(context)
+
+    val youtubeMusic = YouTubeMusicSource(
+        credentials,
+        userAgent = { webUserAgent },
+        region = { java.util.Locale.getDefault().country.takeIf { it.length == 2 } ?: "US" },
+        streamMemory = PrefsStreamWalkMemory(context),
+        // The backup apps' player script (D-98): run off the app's process, kept prepared in the cache.
+        scriptEngine = scriptEngine,
+        scriptCache = app.buxes.sources.youtubemusic.DirectoryPlayerScriptCache(java.io.File(context.cacheDir, "player-scripts")),
+        // A hidden page the online source mints its PoTokens in (D-98).
+        pages = HiddenOriginPages(context),
+    )
+
+    @Volatile
+    private var webUserAgent: String =
+        "Mozilla/5.0 (Linux; Android ${android.os.Build.VERSION.RELEASE}) AppleWebKit/537.36 (KHTML, like Gecko) Mobile Safari/537.36"
+
+    init {
+        BuildConfigFlags.checkMirror = BuildConfig.DEBUG
+        installDebugDiagnostics()
+        registry.register(localSource)
+        registry.register(youtubeMusic)
+        buildVariantSources(context).forEach { registry.register(it) }
+        sourceSettings.apply()
+        RetiredSources.cleanUp(context, credentials)
+        appScope.launch(Dispatchers.IO) {
+            runCatching { android.webkit.WebSettings.getDefaultUserAgent(context) }.getOrNull()?.let {
+                webUserAgent = it
+            }
+        }
+    }
+
+    val environments = Environments(registry)
+
+    /** Whether a song's source can only play it in another app (provider-neutral: by route). */
+    fun playsRemotely(track: app.buxes.core.model.Track): Boolean {
+        val routes = registry.get(track.source.sourceId)?.playback?.routes ?: return false
+        return app.buxes.core.model.PlaybackRoute.REMOTE in routes && app.buxes.core.model.PlaybackRoute.DIRECT !in routes
+    }
+
+    /** Debug-only narrowing of the library to one source (see DebugCommands); null = everything. */
+    val libraryScope = MutableStateFlow<SourceId?>(null)
+    val library = DatabaseLibraryRepository(registry, libraryStore, catalog, appScope, libraryScope)
+    val artworkLoader = ResolvingArtworkLoader(artwork)
+    val deviceSettings = SharedPrefsDeviceSettings(context)
+    /** Local favorites only (Music ▸ Favorites). */
+    val localFavorites = DatabaseFavorites(database, appScope).also { LegacyFavorites.moveInto(context, it, appScope) }
+
+    /** The listener's playlists of the music on this phone (Music ▸ Playlists, D-106). */
+    val playlists = DatabasePlaylists(LocalPlaylistStore(database), appScope)
+
+    /** ONLINE's own library: liked songs, playlists, history (D-34), per account (D-38). */
+    val onlineStore = OnlineLibraryStore(database)
+    val online = OnlineMusicRepository(registry, health, onlineStore, catalog, appScope)
+
+    /** Settings ▸ YouTube Music: the account, the app that plays, and how hand-off behaves. */
+    val onlineService = AppOnlineServiceSettings(this)
+
+    /** The heart on Now Playing: routed to local favorites or ONLINE's liked songs by the song's environment. */
+    val favorites = EnvironmentFavorites(localFavorites, online, environments, { catalog.cached(it) ?: libraryStore.track(it) }, appScope)
+
+    val recommendations = SourceRecommendationEngine(registry, equivalence::exactEquivalents)
+
+    val autoplaySettings: StateFlow<AutoplaySettings> = combine(
+        deviceSettings.autoplay, deviceSettings.onlineRecommendations, deviceSettings.avoidRepeats,
+    ) { on, recs, repeats -> AutoplaySettings(on, recs, repeats) }
+        .stateIn(appScope, SharingStarted.Eagerly, AutoplaySettings())
+
+    /**
+     * The sleep timer (D-75): shared by the screens that set it and the player that carries it
+     * out. Buxes's own player fades and pauses itself; music another app plays is paused too.
+     */
+    val sleepTimer = SleepTimer(appScope, android.os.SystemClock::elapsedRealtime).also { timer ->
+        appScope.launch { timer.expired.collect { if (playbackController.snapshot.value.owner != app.buxes.player.api.PlaybackOwner.Buxes) playbackController.pause() } }
+    }
+
+    private var listening = false
+
+    /** Start recording online listening history (once the player is connected). */
+    fun startListening() {
+        if (listening) return
+        listening = true
+        OnlineHistoryRecorder(playbackController, onlineStore, environments, catalog, libraryStore, appScope, accountKey = { online.accountKey.value }).start()
+    }
+    /** The phone's battery, for the battery LED (D-33). */
+    val battery: StateFlow<BatteryLevel?> = BatteryMonitor.levels(context).stateIn(appScope, SharingStarted.Eagerly, null)
+
+    /** The startup chord and the Wheel's clicks (D-32). */
+    val sounds = DeviceSounds(context)
+
+    /** Music folders, for whichever library source reads from storage (D-32). */
+    val musicFolders = RegistryMusicFolders(registry, appScope)
+
+    /** The virtual device's power (D-26). A fresh process starts by booting; the activity coming
+     *  and going doesn't reboot it. */
+    val power = MutableStateFlow(Power.BOOTING)
+
+    fun togglePower() {
+        when (power.value) {
+            Power.OFF -> power.value = Power.BOOTING
+            Power.BOOTING, Power.ON -> {
+                // Like the original: switching off pauses the music.
+                playbackController.pause()
+                power.value = Power.OFF
+            }
+        }
+    }
+
+    /** Any Wheel press wakes a switched-off device. */
+    fun wake() {
+        if (power.value == Power.OFF) power.value = Power.BOOTING
+    }
+
+    /** The mark appears: the startup chord, unless it's off or music is already playing. */
+    fun onBootChime() {
+        val playing = playbackController.snapshot.value.intent == PlayIntent.PLAY
+        if (deviceSettings.startupSound.value && !playing) sounds.playChord()
+    }
+
+    fun onBootFinished() {
+        if (power.value == Power.BOOTING) power.value = Power.ON
+    }
+
+    /**
+     * Lyrics (LYRICS_ARCHITECTURE.md): LRCLIB by the song's metadata, only with the listener's consent
+     * (D-11), kept in the app's cache directory.
+     */
+    val lyrics = app.buxes.core.lyrics.LyricsRepository(
+        provider = app.buxes.core.lyrics.LrclibProvider(app.buxes.core.lyrics.UrlConnectionLyricsHttp(LYRICS_USER_AGENT)),
+        cache = app.buxes.core.lyrics.FileLyricsCache(java.io.File(context.cacheDir, "lyrics")),
+        consent = { deviceSettings.onlineLyrics.value },
+    )
+
+    /**
+     * Debug builds: lyrics answered on the device instead of by the service (device tests of the lyric
+     * screen with the generated test tones and invented words, never the listener's own songs).
+     */
+    val debugLyrics = MutableStateFlow<((app.buxes.core.lyrics.LyricsRequest) -> app.buxes.core.lyrics.LyricsResult?)?>(null)
+
+    val lyricsGateway = object : app.buxes.feature.nowplaying.LyricsGateway {
+        override val attribution get() = lyrics.attribution
+        override suspend fun lyrics(request: app.buxes.core.lyrics.LyricsRequest) =
+            debugLyrics.value?.invoke(request) ?: this@AppGraph.lyrics.lyrics(request)
+        override fun allow() = deviceSettings.setOnlineLyrics(true)
+    }
+
+    /** The display's background picture, read from the URI the listener chose (D-41). */
+    val displayImages = DisplayImages(context, appScope)
+
+    /** Buxes's own player — Media3 MediaController to the PlaybackService. Main thread only. */
+    val localPlayback by lazy { MediaControllerPlaybackController(context, appScope) }
+
+    /**
+     * The UI's PlaybackController: Buxes's own player for music it plays itself, the official app for
+     * YouTube Music — one owner at a time, hard cuts between them, the local queue never touched by
+     * remote playback (YOUTUBE_MUSIC_ARCHITECTURE §8.3). Main thread only.
+     */
+    val playbackController by lazy { OwnerAwarePlaybackController(localPlayback, remotePlayback, catalog, registry, appScope) }
+    val volume by lazy { SystemVolumeController(context) }
+
+    /** How what Buxes's own player plays sounds, measured in its audio path (D-82, D-83). */
+    val audioMeter = app.buxes.player.service.AudioMeter()
+
+    /**
+     * What the lyrics move with (D-82, D-83): the meter while Buxes's own player has the music;
+     * nothing while another app plays it, so its record of an earlier song never moves another song's
+     * words or orb.
+     */
+    val audioPulse = object : app.buxes.player.api.AudioPulse {
+        private val remote get() = playbackController.owner.value == OwnerAwarePlaybackController.Owner.REMOTE
+        override fun bassAt(positionMs: Long): Float = if (remote) -1f else audioMeter.bassAt(positionMs)
+        override fun levelsAt(positionMs: Long, out: FloatArray): Boolean = !remote && audioMeter.levelsAt(positionMs, out)
+        override fun listen(): AutoCloseable = audioMeter.listen()
+    }
+
+    /** Debug builds: open (true) or close (false) Buxes's space from adb (device tests, D-54). */
+    val debugSpace = MutableStateFlow<Boolean?>(null)
+
+    /** The listener's stickers and where they're stuck (D-55): files in the app's own storage. */
+    val stickers by lazy { app.buxes.stickers.StickerStore(java.io.File(context.filesDir, "stickers")) }
+
+    /** Finds a picture's subject on the phone (D-55); the model loads on first use. */
+    val cutter by lazy { app.buxes.stickers.SubjectCutter(context) }
+
+    /** Whether the hands-on guide was finished or skipped (D-57). */
+    val guide by lazy { app.buxes.guide.GuideStore(context) }
+
+    /** Debug builds: make a sticker from this picture (device tests, without the photo picker). */
+    val debugStickerSource = MutableStateFlow<android.net.Uri?>(null)
+
+    /** Debug builds: start the hands-on guide (true) as on a first launch. */
+    val debugGuide = MutableStateFlow(false)
+
+    /** Debug builds: open a screen ("lyrics", "now-playing", "home", "songs") from adb. */
+    val debugOpen = MutableStateFlow<String?>(null)
+
+    /** Debug builds: open the space and arrange stickers. */
+    val debugArrange = MutableStateFlow(false)
+
+    /**
+     * Turn off Buxes (D-56): the music stops and everything is kept (stickers written, the
+     * player's place saved as it pauses); the caller then closes the app.
+     */
+    fun prepareToTurnOff() {
+        playbackController.pause()
+        stickers.flush()
+        localPlayback.release()
+    }
+
+    /** Where the music is heard and whether it's muted, for the status bar (D-52). */
+    val audioOutput by lazy { app.buxes.player.service.AudioOutputMonitor(context) }
+
+    private var musicAccess = localSource.hasPermission()
+
+    /** The user granted or revoked a runtime permission (e.g. music access). */
+    fun onPermissionsChanged() {
+        musicAccess = localSource.hasPermission()
+        localSource.onPermissionChanged()
+    }
+
+    /** Cheap check on resume; rescans only when access actually changed. */
+    fun recheckPermissions() {
+        if (localSource.hasPermission() != musicAccess) onPermissionsChanged()
+    }
+
+    val playbackDependencies = object : PlaybackDependencies {
+        override val registry = this@AppGraph.registry
+        override val health = this@AppGraph.health
+        override val resolver = this@AppGraph.resolver
+        override val catalog = this@AppGraph.catalog
+        override val artwork = this@AppGraph.artwork
+        override val clock = this@AppGraph.clock
+        override val queueStore = this@AppGraph.queueStore
+        override val autoplay = this@AppGraph.autoplaySettings
+        override val effects = this@AppGraph.deviceSettings.effects
+        override val sleepTimer = this@AppGraph.sleepTimer
+        override val audioMeter = this@AppGraph.audioMeter
+        override val recommendations = this@AppGraph.recommendations
+        override val equivalence = this@AppGraph.equivalence
+        override val streamProviders = this@AppGraph.customSources
+        override suspend fun playedSince(sinceMillis: Long) = onlineStore.playedSince(sinceMillis)
+
+        override fun sessionActivity(context: Context): PendingIntent = PendingIntent.getActivity(
+            context,
+            0,
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
+}
+
+enum class Power { OFF, BOOTING, ON }
+
+/** LRCLIB asks clients to name themselves. */
+private val LYRICS_USER_AGENT = "Buxes/${BuildConfig.VERSION_NAME} (Android music player)"

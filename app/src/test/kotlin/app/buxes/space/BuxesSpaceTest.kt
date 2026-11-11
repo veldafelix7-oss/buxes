@@ -1,0 +1,370 @@
+package app.buxes.space
+
+import android.graphics.Bitmap
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onAllNodesWithContentDescription
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.pinch
+import androidx.compose.ui.test.swipe
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.buxes.core.designsystem.component.PodWheel
+import app.buxes.core.designsystem.shell.DeviceAppearance
+import app.buxes.core.designsystem.shell.DeviceBody
+import app.buxes.core.designsystem.shell.DeviceLayout
+import app.buxes.core.designsystem.shell.FinishPreset
+import app.buxes.core.designsystem.shell.PowerButton
+import app.buxes.core.designsystem.shell.palette
+import app.buxes.core.designsystem.theme.BuxesTheme
+import app.buxes.core.interaction.InputRouter
+import app.buxes.core.interaction.LocalInputRouter
+import app.buxes.core.interaction.BuxesInput
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.GraphicsMode
+import app.buxes.stickers.StickerBorder
+import app.buxes.stickers.StickerLayer
+import app.buxes.stickers.StickerStore
+import java.io.File
+import java.nio.file.Files
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+/**
+ * Buxes's space (D-54): a two-finger pinch takes the object into it, one finger never does, the
+ * Wheel under the fingers lets go, and Return brings the flat app back. Screenshots of the object
+ * in its space go to build/screenshots/ for review.
+ */
+@RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class BuxesSpaceTest {
+    @get:Rule
+    val compose = createComposeRule()
+
+    private lateinit var space: BuxesSpaceState
+    private val wheelInputs = mutableListOf<BuxesInput>()
+    private var turnedOff = 0
+    private val store by lazy { StickerStore(Files.createTempDirectory("stickers").toFile(), io = { it.run() }) }
+
+    private fun buxes(page: SpacePage = SpacePage.MAIN) {
+        RuntimeEnvironment.setQualifiers("w411dp-h891dp-port-420dpi")
+        compose.setContent {
+            space = rememberBuxesSpaceState()
+            BuxesTheme(darkTheme = true) {
+                val palette = DeviceAppearance(FinishPreset.BURGUNDY).palette(darkTheme = true)
+                CompositionLocalProvider(LocalInputRouter provides InputRouter()) {
+                    BuxesSpace(
+                        state = space,
+                        edgeColor = palette.bodyBottom,
+                        spaceTint = Color(0xFF050506),
+                        modifier = Modifier.testTag("space"),
+                        stickers = { StickerLayer(store) },
+                        panel = {
+                            SpacePanel(
+                                space,
+                                page,
+                                onPage = {},
+                                stickers = { StickerGallery(store, onAdd = {}, onOpen = {}, onArrange = {}) },
+                                sticker = {},
+                                help = { HelpContent {} },
+                                onTurnOff = { turnedOff++ },
+                            )
+                        },
+                    ) {
+                        Box(Modifier.fillMaxSize()) {
+                            DeviceBody(palette, Modifier.fillMaxSize())
+                            DeviceLayout(
+                                modifier = Modifier.fillMaxSize(),
+                                screen = { Box(Modifier.fillMaxSize()) },
+                                wheel = { d -> PodWheel(onInput = { wheelInputs += it }, diameter = d, palette = palette, modifier = Modifier.testTag("wheel")) },
+                                powerButton = { PowerButton(on = true, palette = palette, onToggle = {}) },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        compose.mainClock.autoAdvance = false
+        compose.mainClock.advanceTimeBy(100)
+    }
+
+    @Test
+    fun `a two-finger pinch takes Buxes into its space`() {
+        buxes()
+        compose.onNodeWithTag("space").performTouchInput {
+            pinch(
+                start0 = Offset(width * 0.25f, height * 0.35f), end0 = Offset(width * 0.45f, height * 0.48f),
+                start1 = Offset(width * 0.75f, height * 0.65f), end1 = Offset(width * 0.55f, height * 0.52f),
+                durationMillis = 400,
+            )
+        }
+        compose.mainClock.advanceTimeBy(1_500)
+        assertEquals(SpacePhase.PHYSICAL, space.phase)
+        assertTrue(space.depth.value > 0.98f)
+        screenshot("space-burgundy")
+    }
+
+    @Test
+    fun `one finger turning the Wheel never enters the space`() {
+        buxes()
+        compose.onNodeWithTag("wheel").performTouchInput {
+            swipe(Offset(width * 0.85f, height * 0.5f), Offset(width * 0.5f, height * 0.9f), durationMillis = 300)
+        }
+        compose.mainClock.advanceTimeBy(800)
+        assertEquals(SpacePhase.NORMAL, space.phase)
+        assertTrue(wheelInputs.any { it is BuxesInput.Rotate }, "the Wheel still turns")
+    }
+
+    @Test
+    fun `a pinch over the Wheel doesn't turn it`() {
+        buxes()
+        compose.onNodeWithTag("wheel").performTouchInput {
+            pinch(
+                start0 = Offset(width * 0.1f, height * 0.5f), end0 = Offset(width * 0.42f, height * 0.5f),
+                start1 = Offset(width * 0.9f, height * 0.5f), end1 = Offset(width * 0.58f, height * 0.5f),
+                durationMillis = 400,
+            )
+        }
+        compose.mainClock.advanceTimeBy(1_500)
+        assertEquals(SpacePhase.PHYSICAL, space.phase)
+        assertTrue(wheelInputs.none { it is BuxesInput.Rotate }, "no rotation from a pinch: $wheelInputs")
+    }
+
+    @Test
+    fun `a small pinch springs back, and Return brings the flat Buxes back`() {
+        buxes()
+        compose.onNodeWithTag("space").performTouchInput {
+            pinch(
+                start0 = Offset(width * 0.3f, height * 0.4f), end0 = Offset(width * 0.33f, height * 0.42f),
+                start1 = Offset(width * 0.7f, height * 0.6f), end1 = Offset(width * 0.67f, height * 0.58f),
+                durationMillis = 300,
+            )
+        }
+        compose.mainClock.advanceTimeBy(1_500)
+        assertEquals(SpacePhase.NORMAL, space.phase, "too small to be a pinch")
+
+        compose.runOnUiThread { space.enter() }
+        compose.mainClock.advanceTimeBy(1_500)
+        assertEquals(SpacePhase.PHYSICAL, space.phase)
+        compose.runOnUiThread { space.leave() }
+        compose.mainClock.advanceTimeBy(1_500)
+        assertEquals(SpacePhase.NORMAL, space.phase)
+        assertEquals(0f, space.depth.value)
+    }
+
+    /** Two fingers on the space, side by side about its centre, [half] apart from it. */
+    private inner class Fingers(var half: Float) {
+        var centre = Offset.Zero
+        val depths = mutableListOf<Float>()
+
+        fun down() = compose.onNodeWithTag("space").performTouchInput {
+            centre = center
+            down(0, centre - Offset(half, 0f))
+            down(1, centre + Offset(half, 0f))
+        }
+
+        /** Each finger moves [by] px outwards (negative: inwards), one event; the object's depth after it. */
+        fun step(by: Float) {
+            half += by
+            compose.onNodeWithTag("space").performTouchInput {
+                updatePointerTo(0, centre - Offset(half, 0f))
+                updatePointerTo(1, centre + Offset(half, 0f))
+                move()
+            }
+            depths += space.depth.value
+        }
+
+        fun lift(afterMillis: Long = 0) = compose.onNodeWithTag("space").performTouchInput {
+            if (afterMillis > 0) advanceEventTime(afterMillis)
+            up(0)
+            up(1)
+        }
+    }
+
+    @Test
+    fun `the object follows the pinch from where it is - no jump when it's recognised - and back again`() {
+        buxes()
+        val fingers = Fingers(half = 270f)
+        fingers.down()
+        repeat(14) { fingers.step(-10f) }
+        val followed = fingers.depths.filter { it > 0f }
+        assertTrue(followed.isNotEmpty(), "the pinch was recognised: ${fingers.depths}")
+        assertTrue(followed.first() < 0.12f, "it starts from where the object is, not with a lurch: ${fingers.depths}")
+        assertTrue(fingers.depths.zipWithNext().all { (a, b) -> b >= a }, "closing pushes it back steadily: ${fingers.depths}")
+        val deepest = space.depth.value
+        repeat(6) { fingers.step(10f) }
+        assertTrue(space.depth.value < deepest, "opening the fingers brings it back: ${fingers.depths}")
+        assertEquals(SpacePhase.ENTERING, space.phase)
+        fingers.lift()
+        compose.mainClock.advanceTimeBy(1_500)
+        assertEquals(SpacePhase.NORMAL, space.phase, "let go heading back: it comes back")
+        assertEquals(0f, space.depth.value)
+    }
+
+    @Test
+    fun `a quick pinch that ends short still goes in - the release keeps the fingers' speed`() {
+        buxes()
+        val fingers = Fingers(half = 270f)
+        fingers.down()
+        repeat(8) { fingers.step(-10f) }
+        assertTrue(space.depth.value in 0.01f..BuxesSpaceState.ENTER_THRESHOLD, "short of the threshold: ${space.depth.value}")
+        fingers.lift()
+        compose.mainClock.advanceTimeBy(1_500)
+        assertEquals(SpacePhase.PHYSICAL, space.phase)
+    }
+
+    @Test
+    fun `fingers that stop before letting go carry no speed`() {
+        buxes()
+        val fingers = Fingers(half = 270f)
+        fingers.down()
+        repeat(8) { fingers.step(-10f) }
+        fingers.lift(afterMillis = 300)
+        compose.mainClock.advanceTimeBy(1_500)
+        assertEquals(SpacePhase.NORMAL, space.phase, "short of the threshold and still: it springs back")
+    }
+
+    @Test
+    fun `spreading two fingers brings the object back with them`() {
+        buxes()
+        compose.runOnUiThread { space.enter() }
+        compose.mainClock.advanceTimeBy(1_500)
+        assertEquals(SpacePhase.PHYSICAL, space.phase)
+        val fingers = Fingers(half = 162f)
+        fingers.down()
+        repeat(14) { fingers.step(10f) }
+        val following = fingers.depths.filter { it < 1f }
+        assertTrue(following.size >= 6, "the spread was recognised and followed: ${fingers.depths}")
+        assertTrue(following.zipWithNext().all { (a, b) -> b <= a }, "opening brings it steadily closer: ${fingers.depths}")
+        assertEquals(SpacePhase.ENTERING, space.phase)
+        fingers.lift(afterMillis = 300)
+        compose.mainClock.advanceTimeBy(1_500)
+        assertEquals(SpacePhase.NORMAL, space.phase)
+    }
+
+    @Test
+    fun `two fingers held on the Wheel never make a hold - a pinch may be starting`() {
+        buxes()
+        compose.onNodeWithTag("wheel").performTouchInput {
+            down(0, Offset(width * 0.5f, height * 0.88f)) // ⏯: held, it would switch the display off
+            down(1, Offset(width * 0.5f, height * 0.12f))
+        }
+        compose.mainClock.advanceTimeBy(1_200)
+        compose.onNodeWithTag("wheel").performTouchInput {
+            up(1)
+            up(0)
+        }
+        compose.mainClock.advanceTimeBy(300)
+        assertTrue(wheelInputs.none { it is BuxesInput.LongPress }, "no hold under two fingers: $wheelInputs")
+
+        // One finger held is still a hold.
+        compose.onNodeWithTag("wheel").performTouchInput { down(Offset(width * 0.5f, height * 0.88f)) }
+        compose.mainClock.advanceTimeBy(1_200)
+        compose.onNodeWithTag("wheel").performTouchInput { up() }
+        compose.mainClock.advanceTimeBy(300)
+        assertTrue(wheelInputs.any { it is BuxesInput.LongPress }, "one finger still holds: $wheelInputs")
+    }
+
+    @Test
+    fun `the help page in the space`() {
+        buxes(SpacePage.HELP)
+        compose.runOnUiThread { space.enter() }
+        compose.mainClock.advanceTimeBy(1_500)
+        screenshot("space-help")
+    }
+
+    @Test
+    fun `every visit opens on the settings page, large`() {
+        buxes()
+        compose.runOnUiThread { space.enter() }
+        compose.mainClock.advanceTimeBy(1_500)
+        assertEquals(SpaceFocus.SETTINGS, space.focus)
+        assertEquals(0f, space.zoom.value)
+        compose.onNodeWithText("Stickers").assertExists()
+        compose.onNodeWithText("Turn off Buxes").assertExists()
+        compose.onNodeWithText("Personalize").assertDoesNotExist()
+        screenshot("space-settings-large")
+
+        // Buxes, at the bottom: the Buxes comes close, the page goes small into its corner.
+        compose.onNode(hasText("Buxes") and SemanticsMatcher.keyIsDefined(SemanticsProperties.Selected)).performClick()
+        compose.mainClock.advanceTimeBy(1_500)
+        assertEquals(SpaceFocus.BUXES, space.focus)
+        assertTrue(space.zoom.value > 0.98f)
+        screenshot("space-buxes-close")
+
+        // Settings brings the page back; and leaving and coming back starts large again.
+        compose.onNode(hasText("Settings") and SemanticsMatcher.keyIsDefined(SemanticsProperties.Selected)).performClick()
+        compose.mainClock.advanceTimeBy(1_500)
+        assertEquals(SpaceFocus.SETTINGS, space.focus)
+        assertTrue(space.zoom.value < 0.02f)
+        compose.runOnUiThread { space.focusBuxes() }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.runOnUiThread { space.leave() }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.runOnUiThread { space.enter() }
+        compose.mainClock.advanceTimeBy(1_500)
+        assertEquals(SpaceFocus.SETTINGS, space.focus)
+        assertEquals(0f, space.zoom.value)
+    }
+
+    @Test
+    fun `a tap on the small Buxes brings it close, and a tap when close returns to it`() {
+        buxes()
+        compose.runOnUiThread { space.enter() }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.onNodeWithTag("space").performTouchInput { click(Offset(width * 0.2f, height * 0.45f)) }
+        compose.mainClock.advanceTimeBy(1_500)
+        assertEquals(SpaceFocus.BUXES, space.focus)
+        compose.onNodeWithTag("space").performTouchInput { click(Offset(width * 0.3f, height * 0.45f)) }
+        compose.mainClock.advanceTimeBy(1_500)
+        assertEquals(SpacePhase.NORMAL, space.phase)
+    }
+
+    @Test
+    fun `the gallery shows every sticker, and Turn off asks the app to close`() {
+        repeat(3) { i -> store.add(testSticker(i), testSticker(i), StickerBorder.WHITE, 0.5f) }
+        store.place(store.stickers.value.first().id)
+        buxes()
+        compose.runOnUiThread { space.enter() }
+        compose.mainClock.advanceTimeBy(1_500)
+        compose.onNodeWithContentDescription("Add a sticker").assertExists()
+        assertEquals(3, compose.onAllNodesWithContentDescription("Sticker", substring = true).fetchSemanticsNodes().size)
+        compose.mainClock.advanceTimeBy(500)
+        screenshot("space-gallery")
+        compose.onNodeWithText("Turn off Buxes").performClick()
+        assertEquals(1, turnedOff)
+    }
+
+    /** A stand-in sticker: a coloured disc on clear. */
+    private fun testSticker(seed: Int): Bitmap {
+        val b = Bitmap.createBitmap(120, 120, Bitmap.Config.ARGB_8888)
+        val c = android.graphics.Canvas(b)
+        val colors = intArrayOf(0xFFE5484D.toInt(), 0xFF46A758.toInt(), 0xFFF5D90A.toInt())
+        c.drawCircle(60f, 60f, 50f, android.graphics.Paint().apply { color = colors[seed % colors.size]; isAntiAlias = true })
+        return b
+    }
+
+    private fun screenshot(name: String) {
+        val bitmap = compose.onRoot().captureToImage().asAndroidBitmap()
+        File(File("build/screenshots").apply { mkdirs() }, "$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+    }
+}

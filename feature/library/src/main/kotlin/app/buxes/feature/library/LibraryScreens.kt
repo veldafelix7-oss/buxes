@@ -1,0 +1,175 @@
+package app.buxes.feature.library
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.buxes.core.designsystem.component.FocusList
+import app.buxes.core.designsystem.component.ListInputEffect
+import app.buxes.core.designsystem.component.LoadingScreen
+import app.buxes.core.designsystem.component.LocalScreenInsets
+import app.buxes.core.designsystem.component.MenuPreview
+import app.buxes.core.designsystem.component.MenuRow
+import app.buxes.core.designsystem.component.MessageState
+import app.buxes.core.designsystem.component.TrackRow
+import app.buxes.core.designsystem.component.formatDuration
+import app.buxes.core.designsystem.symbol.BuxesSymbol
+import app.buxes.core.interaction.rememberFocusListState
+import app.buxes.core.model.Track
+import app.buxes.player.api.FavoritesRepository
+import app.buxes.sources.api.CapabilityAction
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+
+/** A menu entry: its label, what its next column looks like, and what choosing it does. */
+private data class MenuEntry(
+    val label: String,
+    val preview: MenuPreview,
+    val action: () -> Unit,
+    val leading: BuxesSymbol? = null,
+    val chevron: Boolean = true,
+)
+
+@Composable
+private fun PaperMenu(entries: List<MenuEntry>, stateKey: String) {
+    val focus = rememberFocusListState(stateKey)
+    ListInputEffect(focus, onActivate = { entries[it].action() })
+    FocusList(
+        items = entries,
+        state = focus,
+        key = { it.label },
+        contentPadding = LocalScreenInsets.current.listPadding(),
+        onActivate = { entries[it].action() },
+        preview = { it.preview },
+        modifier = Modifier.fillMaxSize(),
+    ) { entry, _, focused ->
+        MenuRow(entry.label, focused, leading = entry.leading, showChevron = entry.chevron)
+    }
+}
+
+/**
+ * The main menu (navigation-map.md §1, D-29), on the paper like every list: the focused item's
+ * next column is previewed beyond the arc. Only implemented destinations appear — nothing faked.
+ */
+@Composable
+fun HomeScreen(
+    repository: LibraryRepository,
+    nowPlayingArtwork: String?,
+    nowPlayingActive: Boolean,
+    onMusic: () -> Unit,
+    onShuffleSongs: () -> Unit,
+    onNowPlaying: () -> Unit,
+    onSettings: () -> Unit,
+    /** ONLINE (D-34), when an online source is connected; [onlineArtwork] previews it. */
+    onOnline: (() -> Unit)? = null,
+    onlineArtwork: List<String> = emptyList(),
+    /** A source that needs the listener (music access) offers its action first, as in Music. */
+    onSourceAction: (CapabilityAction) -> Unit = {},
+) {
+    val songs by repository.songs.collectAsStateWithLifecycle()
+    val actions by repository.pendingActions.collectAsStateWithLifecycle()
+    val tracks = (songs as? LibraryState.Ready)?.tracks.orEmpty()
+    val art = remember(tracks) { LibraryIndex.artwork(tracks) }
+    val shuffled = remember(art) { art.shuffled() }
+    val entries = buildList {
+        actions.forEach { add(MenuEntry(it.note, MenuPreview.None, { onSourceAction(it.action) }, leading = BuxesSymbol.Lock, chevron = false)) }
+        add(MenuEntry("Music", MenuPreview.Artwork(art), onMusic))
+        if (onOnline != null) add(MenuEntry("Online", if (onlineArtwork.isEmpty()) MenuPreview.None else MenuPreview.Carousel(onlineArtwork), onOnline))
+        add(MenuEntry("Shuffle songs", MenuPreview.Carousel(shuffled), onShuffleSongs, chevron = false))
+        if (nowPlayingActive) add(MenuEntry("Now Playing", MenuPreview.Artwork(listOfNotNull(nowPlayingArtwork)), onNowPlaying))
+        add(MenuEntry("Settings", MenuPreview.Instrument, onSettings))
+    }
+    PaperMenu(entries, "home")
+}
+
+/** The Music menu. Sources that need the user (e.g. permission) offer their action first. */
+@Composable
+fun MusicScreen(
+    repository: LibraryRepository,
+    favorites: FavoritesRepository,
+    onCoverFlow: () -> Unit,
+    onAlbums: () -> Unit,
+    onArtists: () -> Unit,
+    onSongs: () -> Unit,
+    onFavorites: () -> Unit,
+    onSourceAction: (CapabilityAction) -> Unit,
+    /** The listener's playlists (D-106); null leaves Playlists out. */
+    playlists: PlaylistRepository? = null,
+    onPlaylists: () -> Unit = {},
+) {
+    val songs by repository.songs.collectAsStateWithLifecycle()
+    val actions by repository.pendingActions.collectAsStateWithLifecycle()
+    val favoriteIds by favorites.favorites.collectAsStateWithLifecycle()
+    val tracks = (songs as? LibraryState.Ready)?.tracks.orEmpty()
+    val albums by remember(repository) { repository.albums() }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val artists by remember(repository) { repository.artists() }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val albumArt = remember(albums) { albums.mapNotNull { it.artworkUri }.take(10) }
+    val artistArt = remember(artists) { artists.mapNotNull { it.artworkUri }.take(8) }
+    val songArt = remember(tracks) { LibraryIndex.artwork(tracks) }
+    val favoriteArt = remember(tracks, favoriteIds) { tracks.filter { it.id in favoriteIds }.mapNotNull { it.artwork?.uri }.distinct().take(8) }
+    val playlistList by (playlists?.playlists ?: NoPlaylists).collectAsStateWithLifecycle()
+    val playlistArt = remember(playlistList) { playlistList.orEmpty().flatMap { it.covers.take(2) }.distinct().take(8) }
+    val entries = buildList {
+        actions.forEach { add(MenuEntry(it.note, MenuPreview.None, { onSourceAction(it.action) }, leading = BuxesSymbol.Lock, chevron = false)) }
+        add(MenuEntry("Cover Flow", MenuPreview.Carousel(albumArt), onCoverFlow))
+        add(MenuEntry("Albums", MenuPreview.Artwork(albumArt), onAlbums))
+        add(MenuEntry("Artists", if (artistArt.isEmpty()) MenuPreview.None else MenuPreview.Artwork(artistArt, round = true), onArtists))
+        add(MenuEntry("Songs", MenuPreview.Artwork(songArt), onSongs))
+        add(MenuEntry("Favorites", if (favoriteArt.isEmpty()) MenuPreview.None else MenuPreview.Artwork(favoriteArt), onFavorites))
+        if (playlists != null) add(MenuEntry("Playlists", if (playlistArt.isEmpty()) MenuPreview.None else MenuPreview.Artwork(playlistArt), onPlaylists))
+    }
+    PaperMenu(entries, "music")
+}
+
+/**
+ * Every song from every library source, A to Z. Center plays the list from the focused song;
+ * long-press Center offers Play next / Add to Up Next.
+ */
+@Composable
+fun SongsScreen(
+    repository: LibraryRepository,
+    onPlay: (tracks: List<Track>, index: Int) -> Unit,
+    onPlayNext: (Track) -> Unit,
+    onAddToQueue: (Track) -> Unit,
+) {
+    val state by repository.songs.collectAsStateWithLifecycle()
+    val actions by repository.pendingActions.collectAsStateWithLifecycle()
+    val insets = LocalScreenInsets.current
+    val tracks = (state as? LibraryState.Ready)?.tracks.orEmpty()
+    val focus = rememberFocusListState("songs")
+    val menu = songMenu(onPlayNext, onAddToQueue)
+    val showMenu: (Int) -> Unit = { index -> tracks.getOrNull(index)?.let(menu) }
+    ListInputEffect(focus, onActivate = { onPlay(tracks, it) }, onLongPress = showMenu)
+
+    when {
+        state is LibraryState.Loading -> LoadingScreen("Reading your music")
+        tracks.isEmpty() -> Box(Modifier.fillMaxSize().padding(top = insets.top, bottom = insets.bottom), contentAlignment = Alignment.Center) {
+            MessageState(BuxesSymbol.Note, "No songs yet", noMusicMessage(actions.isNotEmpty()))
+        }
+        else -> FocusList(
+            items = tracks,
+            state = focus,
+            key = { it.id.value },
+            contentPadding = insets.listPadding(),
+            onActivate = { onPlay(tracks, it) },
+            onLongPress = showMenu,
+            preview = { track -> MenuPreview.Artwork(listOfNotNull(track.artwork?.uri)) },
+            modifier = Modifier.fillMaxSize(),
+        ) { track, _, focused ->
+            TrackRow(
+                title = track.title,
+                subtitle = track.artistDisplay,
+                focused = focused,
+                artworkUri = track.artwork?.uri,
+                trailing = formatDuration(track.durationMs),
+            )
+        }
+    }
+}
+
+private val NoPlaylists: StateFlow<List<LibraryPlaylist>?> = MutableStateFlow(null)
