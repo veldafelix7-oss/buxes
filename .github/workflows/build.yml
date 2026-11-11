@@ -21,17 +21,25 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Android SDK
+        # The runner's SDK, with Google's license hashes written as files (the documented way for
+        # CI); the Android Gradle plugin then downloads any platform or build-tools it is missing.
         run: |
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKMANAGER" --licenses > /dev/null || true
-          "$SDKMANAGER" --install "platforms;android-37" "build-tools;37.0.0" "platform-tools" > /dev/null
-          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          set -x
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/android-sdk}}"
+          mkdir -p "$SDK/licenses"
+          printf '\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n24333f8a63b6825ea9c5514f83c2829b004d1fee\n' > "$SDK/licenses/android-sdk-license"
+          printf '\n84831b9409646a918e30573bab4c9c91346d8abd\n' > "$SDK/licenses/android-sdk-preview-license"
+          printf '\nd975f751698a77b662f1254ddbeed3901e976f5a\n' > "$SDK/licenses/intel-android-extra-license"
+          echo "sdk.dir=$SDK" > local.properties
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          ls "$SDK" || true
 
       - name: Gradle
         uses: gradle/actions/setup-gradle@v4
