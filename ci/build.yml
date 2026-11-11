@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: build-${{ github.ref }}
@@ -65,7 +66,27 @@ jobs:
           fi
 
       - name: Build
-        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          ./gradlew :app:assembleRelease --no-daemon --console=plain 2>&1 | tee build.log
+
+      - name: Report a failed build
+        # The build's errors, filed as an issue so they can be read without the runner's logs.
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo '```'
+            grep -n -E "^e: |error:|warning: unresolved|What went wrong|Execution failed|FAILED|Caused by|Could not|Unresolved reference|> Task .* FAILED" build.log | head -n 120
+            echo
+            echo "----- tail -----"
+            tail -n 80 build.log
+            echo '```'
+          } > report.md
+          gh issue create --title "Build failed: ${{ github.sha }}" --body-file report.md --label build || gh issue create --title "Build failed: ${{ github.sha }}" --body-file report.md
 
       - name: Name the APK
         id: apk
