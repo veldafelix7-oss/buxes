@@ -6,9 +6,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Buxes's own updates (D-99): a release downloaded from GitHub, handed to Android's installer
-         (which asks the listener to confirm) once it's checked to be this app, signed by the same key. -->
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Buxes's own updates (D-99): the app tells of a new release and opens its page; installing is
+         left to the browser. REQUEST_INSTALL_PACKAGES is deliberately not asked for: Play Protect in
+         some regions (Indonesia among them) blocks sideloaded apps that hold it outright. -->
 
     <!-- Remote playback (YOUTUBE_MUSIC_ARCHITECTURE §8): Buxes needs to see whether the app that
          plays online songs is installed, and to open it on a song. -->
