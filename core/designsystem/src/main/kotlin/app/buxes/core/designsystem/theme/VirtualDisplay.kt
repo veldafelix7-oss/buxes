@@ -153,12 +153,11 @@ object DisplayColors {
         val surface = surface(theme, display, image)
         val base = when (theme) {
             DisplayTheme.CARBON -> CarbonTonalColors
+            // Buxes: glass is always white ink on blue (or on the cover), whatever the system theme.
             DisplayTheme.GLASS -> if (surface == null) {
-                if (darkSystem) DarkColors else LightColors
+                BuxesGlassColors
             } else {
-                // Glass on your own background: light or dark glass, whichever reads better on it.
-                val glass = if (prefersDarkInk(effectiveLuminance(surface, image))) LightColors else DarkColors
-                glass.copy(canvas = if (surface.image == null) readablePaper(surface.solid, glass.labelPrimary) else surface.solid)
+                BuxesGlassColors.copy(canvas = if (surface.image == null) readablePaper(surface.solid, BuxesGlassColors.labelPrimary) else surface.solid)
             }
             DisplayTheme.CUSTOM -> custom(surface ?: DisplaySurface(Color(display.solidArgb), null, 0f), image)
         }

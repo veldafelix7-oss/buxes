@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-11
+
+### Changed
+- **White ink everywhere on Glass:** the display's text is always white, with a soft blue halo so it reads on the pale top of the gradient.
+- **The cover behind the glass:** while a song plays, its cover — softened to frosted glass — is the display's background on every screen, Now Playing included, and sits behind the mini player too. The blue room returns when nothing plays. A background of your own (Settings ▸ Appearance ▸ Background) still wins.
+- **Clearer glass:** every pane's tint is lighter, closer to a phone's own, and the glass itself is white rather than black.
+- **A paler, more visible blue:** the gradient runs from a pale sky to a clear blue, and the guide's tour sits on it instead of black.
+
 ## [1.0.2] - 2026-11-11
 
 ### Changed

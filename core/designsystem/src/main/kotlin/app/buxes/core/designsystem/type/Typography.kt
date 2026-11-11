@@ -396,6 +396,7 @@ fun BuxesText(
         style.shadow != null -> style.shadow
         LocalDisplaySurface.current?.image != null -> Shadow(colors.canvas.copy(alpha = 0.9f), Offset.Zero, blurRadius = with(density) { 4.dp.toPx() })
         colors.isDark && !colors.isIndustrial && LocalTextDepth.current -> Shadow(Color.Black.copy(alpha = 0.45f), Offset(0f, with(density) { 1.dp.toPx() }), blurRadius = with(density) { 3.dp.toPx() })
+        colors.isDark && !colors.isIndustrial && !colors.isTonal -> Shadow(Color(0xFF0B3C9C).copy(alpha = 0.35f), Offset(0f, with(density) { 1.dp.toPx() }), blurRadius = with(density) { 4.dp.toPx() })
         else -> null
     }
     BasicText(

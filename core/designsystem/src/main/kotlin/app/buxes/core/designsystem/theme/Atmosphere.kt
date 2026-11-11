@@ -26,13 +26,14 @@ import kotlin.math.sin
 @Immutable
 data class Atmosphere(val top: Color, val bottom: Color) {
     companion object {
+        /** Buxes's blue: a pale sky at the top down to a clear blue, light enough for the glass to float on. */
+        val BuxesBlue = Atmosphere(top = Color(0xFF8FE3FF), bottom = Color(0xFF2B7BFF))
+
         /**
          * Buxes's room: the modern blue gradient (sky #60EFFF over deep #0061FF) the glass body sits
          * in. The dark theme keeps the same hues, deeper, so the glass still reads as glass.
          */
-        fun neutral(colors: BuxesColors): Atmosphere =
-            if (colors.isDark) Atmosphere(top = Color(0xFF1C8BFF), bottom = Color(0xFF0038B8))
-            else Atmosphere(top = Color(0xFF60EFFF), bottom = Color(0xFF0061FF))
+        fun neutral(colors: BuxesColors): Atmosphere = BuxesBlue
 
         /** Derive from artwork pixels. Neutral artwork stays neutral; vivid artwork tints softly. */
         fun fromArtwork(bitmap: Bitmap, isDark: Boolean): Atmosphere {

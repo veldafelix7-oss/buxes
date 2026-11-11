@@ -78,6 +78,8 @@ import androidx.navigation3.ui.NavDisplay
 import app.buxes.core.common.DiskActivity
 import app.buxes.core.common.Outcome
 import app.buxes.core.designsystem.artwork.BackgroundExtension
+import app.buxes.core.designsystem.artwork.GlassArt
+import app.buxes.core.designsystem.theme.DisplayTheme
 import app.buxes.core.designsystem.artwork.LocalArtworkLoader
 import app.buxes.core.designsystem.artwork.rememberArtworkState
 import app.buxes.core.designsystem.component.GlassMenu
@@ -406,10 +408,24 @@ fun BuxesApp(graph: AppGraph, onSourceAction: (CapabilityAction) -> Unit, onTurn
     val effective = preview ?: appearance
     val displayImage by graph.displayImages.state.collectAsStateWithLifecycle()
     LaunchedEffect(effective.screen.imageUri) { graph.displayImages.show(effective.screen.imageUri) }
+    // Buxes: on Glass, with no background of the listener's own, the playing song's cover — softened
+    // to frosted glass — is the display's background on every screen; the blue room when nothing plays.
+    val playingItem by graph.playbackController.snapshot.collectAsStateWithLifecycle()
+    var coverGlass by remember { mutableStateOf<app.buxes.core.designsystem.theme.DisplayImage?>(null) }
+    CompositionLocalProvider(LocalArtworkLoader provides graph.artworkLoader) {
+        val state = rememberArtworkState(playingItem.item?.artworkUri, 96.dp)
+        // While the next cover loads the last one holds, so a skip never dips through the blue.
+        LaunchedEffect(state) {
+            val bitmap = state.bitmap
+            if (bitmap != null) coverGlass = GlassArt.display(bitmap)
+            else if (state.settled) coverGlass = null
+        }
+    }
+    val coverBehind = effective.display == DisplayTheme.GLASS && effective.screen.background == DisplayBackground.NONE && coverGlass != null
     BuxesTheme(
         displayTheme = effective.display,
-        display = effective.screen,
-        displayImage = displayImage.image?.takeIf { displayImage.uri == effective.screen.imageUri },
+        display = if (coverBehind) effective.screen.copy(background = DisplayBackground.IMAGE, imageOpacity = CoverGlassOpacity, solidArgb = CoverGlassSolid) else effective.screen,
+        displayImage = if (coverBehind) coverGlass else displayImage.image?.takeIf { displayImage.uri == effective.screen.imageUri },
     ) {
         val controller = graph.playbackController
         val snapshot by controller.snapshot.collectAsStateWithLifecycle()
@@ -1670,6 +1686,12 @@ private fun rememberOnlineActions(graph: AppGraph, navigator: Navigator): Online
 }
 
 private const val RADIO_SIZE = 30
+
+/** How much of the softened cover shows through the display's glass. */
+private const val CoverGlassOpacity = 0.85f
+
+/** The blue under and veiling the softened cover (the glass palette's canvas). */
+private const val CoverGlassSolid = 0xFF0B3C9C.toInt()
 
 private const val OUTPUT_REFRESH_MS = 4_000L
 
