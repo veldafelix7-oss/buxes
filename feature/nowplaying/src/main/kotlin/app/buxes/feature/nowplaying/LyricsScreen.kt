@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -353,7 +354,7 @@ fun LyricsScreen(controller: PlaybackController, gateway: LyricsGateway, pulse: 
                         label = "lyricLine",
                     ) { (at, text) ->
                         // The line on its way out keeps all its words; only the line coming in counts them.
-                        val live = transition.targetState.first == at
+                        val live = at == index
                         Lyric(text, ink, quiet, if (lyrics is Lyrics.Synced && live) shown else Int.MAX_VALUE, swell)
                     }
                 }
@@ -458,7 +459,7 @@ private fun Lyric(text: String, color: Color, quiet: Color, shown: Int, swell: (
                     val topLeft = Offset(originX + word.x, originY + line.y + rise * (1f - a))
                     val pivot = Offset(topLeft.x + text.size.width / 2f, topLeft.y + text.size.height / 2f)
                     val shade = a * (1f - 0.18f * rest)
-                    androidx.compose.ui.graphics.drawscope.scale(scale, scale, pivot) {
+                    scale(scale, scale, pivot) {
                         drawText(text, topLeft = topLeft, alpha = shade, shadow = if (current && !reduced) glow else null)
                     }
                 }
