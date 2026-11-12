@@ -431,6 +431,9 @@ fun BuxesApp(graph: AppGraph, onSourceAction: (CapabilityAction) -> Unit, onTurn
         val item = playingItem.item ?: return@LaunchedEffect
         if (item.kind == app.buxes.core.model.MediaKind.LIVE) return@LaunchedEffect
         app.buxes.feature.nowplaying.ArtistPictures.prefetch(appContext, item.artistDisplay, item.title)
+        // The pictures of artists no longer coming up are let go, a little after the music moved on.
+        val queued = graph.playbackController.queue.value.entries.map { it.artistDisplay }
+        app.buxes.feature.nowplaying.ArtistPictures.sweep(appContext, queued + item.artistDisplay)
     }
     CompositionLocalProvider(LocalArtworkLoader provides graph.artworkLoader) {
         val state = rememberArtworkState(playingItem.item?.artworkUri, 96.dp)

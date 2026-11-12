@@ -1,6 +1,7 @@
 package app.buxes.feature.nowplaying
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -27,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -336,7 +338,25 @@ fun LyricsScreen(controller: PlaybackController, gateway: LyricsGateway, pulse: 
                 lyrics == Lyrics.Instrumental && orb.always -> OrbStage(controller, pulse, orb, advancing, following = true, paper, "Instrumental", page = {})
                 lyrics == Lyrics.Instrumental -> Message("Instrumental", "This song has no words.", ink, quiet)
                 else -> OrbStage(controller, pulse, orb, advancing, following = lyrics is Lyrics.Synced && following, paper, caption = null) { swell ->
-                    Lyric(lines.getOrElse(index) { "" }, ink, quiet, if (lyrics is Lyrics.Synced) shown else Int.MAX_VALUE, swell)
+                    // Buxes: the line turns — the sung line lifts away as the next rises in — in step
+                    // with the picture behind it. Lines keyed by place, so a repeated line turns too.
+                    androidx.compose.animation.AnimatedContent(
+                        targetState = index to lines.getOrElse(index) { "" },
+                        transitionSpec = {
+                            if (reduced) {
+                                androidx.compose.animation.EnterTransition.None togetherWith androidx.compose.animation.ExitTransition.None
+                            } else {
+                                (androidx.compose.animation.fadeIn(tween(LINE_IN_MS)) + androidx.compose.animation.slideInVertically(tween(LINE_IN_MS)) { it / 14 })
+                                    .togetherWith(androidx.compose.animation.fadeOut(tween(LINE_OUT_MS)) + androidx.compose.animation.slideOutVertically(tween(LINE_OUT_MS)) { -it / 18 })
+                            }
+                        },
+                        contentKey = { it.first },
+                        label = "lyricLine",
+                    ) { (at, text) ->
+                        // The line on its way out keeps all its words; only the line coming in counts them.
+                        val live = at == index
+                        Lyric(text, ink, quiet, if (lyrics is Lyrics.Synced && live) shown else Int.MAX_VALUE, swell)
+                    }
                 }
             }
             if (details && item != null) {
@@ -409,22 +429,39 @@ private fun Lyric(text: String, color: Color, quiet: Color, shown: Int, swell: (
         val count = layout.lines.sumOf { it.words.size }
         // One animated value per word, reset with the line.
         key(text) {
-            val spec = if (reduced) snap<Float>() else tween<Float>(WORD_FADE_MS)
+            // Buxes: each word pops in — a quick spring from a little small, with a touch of overshoot —
+            // starting exactly at its time (no added wait); the word being sung glows, the words
+            // already sung step back a little. All of it layer-cheap: alpha, scale, one soft shadow.
+            val spec = if (reduced) snap<Float>() else androidx.compose.animation.core.spring<Float>(dampingRatio = 0.62f, stiffness = 1400f)
             val alphas = List(count) { i -> animateFloatAsState(if (i < shown) 1f else 0f, spec, label = "word") }
+            val restSpec = if (reduced) snap<Float>() else tween<Float>(WORD_REST_MS)
+            val rests = List(count) { i -> animateFloatAsState(if (i < shown - 1) 1f else 0f, restSpec, label = "rest") }
             val waiting = count > 0 && shown == 0
-            val rise = layout.fontPx * 0.12f
+            val rise = layout.fontPx * 0.14f
             // Each word measured once per line; fading only changes how it's drawn.
             val measured = remember(layout, wordStyle, color) {
                 layout.lines.flatMap { line -> line.words.map { measurer.measure(it.text, wordStyle.copy(color = color), softWrap = false) } }
             }
+            val glow = remember(color) { androidx.compose.ui.graphics.Shadow(color.copy(alpha = 0.55f), Offset.Zero, 10f) }
             val dots = remember(wordStyle, quiet) { measurer.measure("…", wordStyle.copy(color = quiet), softWrap = false) }
             Canvas(Modifier.fillMaxSize()) {
                 var i = 0
                 for (line in layout.lines) for (word in line.words) {
-                    val a = alphas[i].value
-                    val text = measured[i++]
-                    if (a <= 0.01f) continue
-                    drawText(text, topLeft = Offset(originX + word.x, originY + line.y + rise * (1f - a)), alpha = a)
+                    val raw = alphas[i].value
+                    val rest = rests[i].value
+                    val text = measured[i]
+                    val current = i == shown - 1
+                    i++
+                    if (raw <= 0.01f) continue
+                    val a = raw.coerceIn(0f, 1f)
+                    // Pop: 0.86× up through 1.0 (the spring overshoots a touch), about the word's middle.
+                    val scale = 0.86f + 0.14f * raw
+                    val topLeft = Offset(originX + word.x, originY + line.y + rise * (1f - a))
+                    val pivot = Offset(topLeft.x + text.size.width / 2f, topLeft.y + text.size.height / 2f)
+                    val shade = a * (1f - 0.18f * rest)
+                    scale(scale, scale, pivot) {
+                        drawText(text, topLeft = topLeft, alpha = shade, shadow = if (current && !reduced) glow else null)
+                    }
                 }
                 if (waiting) drawText(dots, topLeft = Offset((size.width - dots.size.width) / 2f, (size.height - dots.size.height) / 2f))
             }
@@ -476,6 +513,10 @@ internal fun lyricInverted(background: LyricsBackground, continuous: Boolean, ha
     else -> hasLines && index % 2 == 1
 }
 private const val WORD_FADE_MS = 140
+private const val LINE_IN_MS = 180
+private const val LINE_OUT_MS = 140
+/** How long a sung word takes to step back behind the one being sung. */
+private const val WORD_REST_MS = 260
 
 /** How much a strong bass hit swells the lyric (D-82): under two percent, felt more than seen. */
 private const val SWELL_SCALE = 0.018f
