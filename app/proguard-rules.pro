@@ -17,3 +17,11 @@
 # Room finds each database's generated <Name>_Impl by name through reflection: WorkManager's
 # WorkDatabase and Buxes's own. Keep the databases, their implementations and constructors.
 -keep class * extends androidx.room.RoomDatabase { <init>(); }
+
+# Buxes: diagnostics are not shipped. Release builds drop verbose/debug/info logging altogether
+# (R8 removes the calls), which also spares the string building behind them.
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+    public static int d(...);
+    public static int i(...);
+}

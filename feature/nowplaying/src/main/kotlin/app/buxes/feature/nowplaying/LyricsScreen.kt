@@ -28,6 +28,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import kotlin.math.sin
+import app.buxes.core.designsystem.type.MoodFaces
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -138,6 +142,14 @@ fun LyricsScreen(controller: PlaybackController, gateway: LyricsGateway, pulse: 
     }
 
     var index by remember(lyrics) { mutableIntStateOf(0) }
+    // Buxes: which lines are the chorus (sung more than once), and how fast the line showing is.
+    val chorus = remember(lines) { LyricMood.chorusLines(lines) }
+    val lyricPace = remember(lyrics, index) {
+        val synced = lyrics as? Lyrics.Synced
+        val line = synced?.lines?.getOrNull(index)
+        if (synced == null || line == null) LinePace.EVEN
+        else LyricMood.pace(WordTiming.starts(line, synced.lines.getOrNull(index + 1)?.startMs), synced.lines.getOrNull(index + 1)?.startMs)
+    }
     // How many words of the line are in; everything while reading, for plain lyrics, or paused on it.
     var shown by remember(lyrics) { mutableIntStateOf(Int.MAX_VALUE) }
     var following by remember(lyrics) { mutableStateOf(true) }
@@ -355,7 +367,7 @@ fun LyricsScreen(controller: PlaybackController, gateway: LyricsGateway, pulse: 
                     ) { (at, text) ->
                         // The line on its way out keeps all its words; only the line coming in counts them.
                         val live = at == index
-                        Lyric(text, ink, quiet, if (lyrics is Lyrics.Synced && live) shown else Int.MAX_VALUE, swell)
+                        Lyric(text, ink, quiet, if (lyrics is Lyrics.Synced && live) shown else Int.MAX_VALUE, swell, pace = if (live) lyricPace else LinePace.EVEN, chorus = at in chorus)
                     }
                 }
             }
@@ -387,14 +399,38 @@ fun LyricsScreen(controller: PlaybackController, gateway: LyricsGateway, pulse: 
  * (only before the song's first line), a quiet ellipsis waits.
  */
 @Composable
-private fun Lyric(text: String, color: Color, quiet: Color, shown: Int, swell: () -> Float = { 0f }) {
-    val measurer = rememberTextMeasurer(cacheSize = 64)
+private fun Lyric(
+    text: String,
+    color: Color,
+    quiet: Color,
+    shown: Int,
+    swell: () -> Float = { 0f },
+    pace: LinePace = LinePace.EVEN,
+    chorus: Boolean = false,
+) {
+    val measurer = rememberTextMeasurer(cacheSize = 96)
     val base = BuxesTheme.type.title
     val typeface = LocalLyricsTypeface.current
     val family = remember(text, typeface) { typeface.familyFor(text) }
     val style = remember(base, family) { base.copy(fontFamily = family, fontWeight = FontWeight.Medium, letterSpacing = 0.sp) }
     val density = LocalDensity.current
     val reduced = BuxesTheme.motion.reduced
+    // Buxes: what each word is — decided once per line, with the line's pace and place.
+    val words = remember(text) { text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() } }
+    val moods = remember(words, pace, chorus) { LyricMood.moods(words, pace, chorus) }
+    val moodOf = remember(words, moods) { words.indices.associate { words[it] to moods[it] } }
+    // The word as it is set: a hot word shouts in capitals.
+    fun shownText(word: String) = if (moodOf[word] == WordMood.HOT) word.uppercase() else word
+    fun styleFor(word: String, px: Float): TextStyle {
+        val mood = moodOf[word] ?: WordMood.PLAIN
+        val size = px * mood.scale
+        return when (mood) {
+            WordMood.HOT -> style.copy(fontFamily = MoodFaces.Heavy, fontWeight = FontWeight.Black, fontSize = with(density) { size.toSp() }, letterSpacing = 0.02.em)
+            WordMood.ENERGY -> style.copy(fontFamily = MoodFaces.Slanted, fontWeight = FontWeight.Bold, fontSize = with(density) { size.toSp() })
+            WordMood.CALM -> style.copy(fontFamily = MoodFaces.Soft, fontWeight = FontWeight.Normal, fontSize = with(density) { size.toSp() }, letterSpacing = 0.03.em)
+            WordMood.PLAIN -> style.copy(fontSize = with(density) { size.toSp() })
+        }
+    }
     BoxWithConstraints(
         Modifier
             .fillMaxSize()
@@ -416,51 +452,101 @@ private fun Lyric(text: String, color: Color, quiet: Color, shown: Int, swell: (
         val heightPx = with(density) { (maxHeight - marginY * 2).toPx() }
         val maxFont = with(density) { (maxHeight * 0.16f).coerceAtMost(64.dp).toPx() }
         val minFont = with(density) { 20.sp.toPx() }
-        val layout = remember(text, widthPx, heightPx, style) {
+        // Each word measured in its own face and size, so hot words have the room they take.
+        val layout = remember(text, widthPx, heightPx, style, moods) {
             LyricLayout.layout(text, widthPx, heightPx, maxFont, minFont) { word, px ->
-                measurer.measure(word, style.copy(fontSize = with(density) { px.toSp() })).size.width.toFloat()
+                measurer.measure(shownText(word), styleFor(word, px)).size.width.toFloat()
             }
         }
         val originX = with(density) { marginX.toPx() }
         val originY = with(density) { marginY.toPx() }
-        val wordStyle = remember(layout.fontPx, style) {
-            style.copy(fontSize = with(density) { layout.fontPx.toSp() }, lineHeight = with(density) { layout.lineHeightPx.toSp() })
-        }
+        val lineHeightSp = with(density) { layout.lineHeightPx.toSp() }
         val count = layout.lines.sumOf { it.words.size }
         // One animated value per word, reset with the line.
         key(text) {
-            // Buxes: each word pops in — a quick spring from a little small, with a touch of overshoot —
-            // starting exactly at its time (no added wait); the word being sung glows, the words
-            // already sung step back a little. All of it layer-cheap: alpha, scale, one soft shadow.
-            val spec = if (reduced) snap<Float>() else androidx.compose.animation.core.spring<Float>(dampingRatio = 0.62f, stiffness = 1400f)
-            val alphas = List(count) { i -> animateFloatAsState(if (i < shown) 1f else 0f, spec, label = "word") }
+            val flat = remember(layout) { layout.lines.flatMap { it.words } }
+            val wordMoods = remember(flat, moodOf) { flat.map { moodOf[it.text] ?: WordMood.PLAIN } }
+            // Each mood arrives its own way — all starting exactly at the word's time.
+            val alphas = List(count) { i ->
+                val spec = when {
+                    reduced -> snap<Float>()
+                    wordMoods[i] == WordMood.HOT -> androidx.compose.animation.core.spring<Float>(dampingRatio = 0.5f, stiffness = 2200f)
+                    wordMoods[i] == WordMood.ENERGY -> androidx.compose.animation.core.spring<Float>(dampingRatio = 0.42f, stiffness = 1600f)
+                    wordMoods[i] == WordMood.CALM -> tween<Float>(CALM_IN_MS)
+                    else -> androidx.compose.animation.core.spring<Float>(dampingRatio = 0.6f, stiffness = 1300f)
+                }
+                animateFloatAsState(if (i < shown) 1f else 0f, spec, label = "word")
+            }
             val restSpec = if (reduced) snap<Float>() else tween<Float>(WORD_REST_MS)
             val rests = List(count) { i -> animateFloatAsState(if (i < shown - 1) 1f else 0f, restSpec, label = "rest") }
             val waiting = count > 0 && shown == 0
-            val rise = layout.fontPx * 0.14f
-            // Each word measured once per line; fading only changes how it's drawn.
-            val measured = remember(layout, wordStyle, color) {
-                layout.lines.flatMap { line -> line.words.map { measurer.measure(it.text, wordStyle.copy(color = color), softWrap = false) } }
+            val rise = layout.fontPx * 0.2f
+            // Each word measured once per line; the animation only changes how it's drawn.
+            val measured = remember(layout, style, color, wordMoods) {
+                flat.mapIndexed { i, w ->
+                    val mood = wordMoods[i]
+                    val tint = if (mood == WordMood.PLAIN) color else mood.color
+                    measurer.measure(shownText(w.text), styleFor(w.text, layout.fontPx).copy(color = tint, lineHeight = lineHeightSp), softWrap = false)
+                }
             }
-            val glow = remember(color) { androidx.compose.ui.graphics.Shadow(color.copy(alpha = 0.55f), Offset.Zero, 10f) }
-            val dots = remember(wordStyle, quiet) { measurer.measure("…", wordStyle.copy(color = quiet), softWrap = false) }
+            val glowWhite = remember(color) { androidx.compose.ui.graphics.Shadow(color.copy(alpha = 0.6f), Offset.Zero, 12f) }
+            val glowHot = remember { androidx.compose.ui.graphics.Shadow(WordMood.HOT.color.copy(alpha = 0.8f), Offset.Zero, 18f) }
+            val glowEnergy = remember { androidx.compose.ui.graphics.Shadow(WordMood.ENERGY.color.copy(alpha = 0.7f), Offset.Zero, 14f) }
+            val glowCalm = remember { androidx.compose.ui.graphics.Shadow(WordMood.CALM.color.copy(alpha = 0.5f), Offset.Zero, 16f) }
+            val dots = remember(style, quiet) { measurer.measure("…", style.copy(fontSize = with(density) { layout.fontPx.toSp() }, color = quiet), softWrap = false) }
             Canvas(Modifier.fillMaxSize()) {
                 var i = 0
                 for (line in layout.lines) for (word in line.words) {
                     val raw = alphas[i].value
                     val rest = rests[i].value
-                    val text = measured[i]
+                    val textLayout = measured[i]
+                    val mood = wordMoods[i]
                     val current = i == shown - 1
                     i++
                     if (raw <= 0.01f) continue
                     val a = raw.coerceIn(0f, 1f)
-                    // Pop: 0.86× up through 1.0 (the spring overshoots a touch), about the word's middle.
-                    val scale = 0.86f + 0.14f * raw
-                    val topLeft = Offset(originX + word.x, originY + line.y + rise * (1f - a))
-                    val pivot = Offset(topLeft.x + text.size.width / 2f, topLeft.y + text.size.height / 2f)
-                    val shade = a * (1f - 0.18f * rest)
-                    scale(scale, scale, pivot) {
-                        drawText(text, topLeft = topLeft, alpha = shade, shadow = if (current && !reduced) glow else null)
+                    val arriving = 1f - a
+                    // The way in, by mood: a hot word slams down from large and shakes; an energetic
+                    // one pops with a big overshoot; a calm one drifts up slowly; a plain one pops.
+                    // A fast (rap) line slides its words in from the left.
+                    val scale: Float
+                    var dx = 0f
+                    var dy: Float
+                    when (mood) {
+                        WordMood.HOT -> {
+                            scale = 1f + 0.5f * arriving
+                            dx = sin(raw * 12.6f) * arriving * 7f * density
+                            dy = 0f
+                        }
+                        WordMood.ENERGY -> {
+                            scale = 0.6f + 0.4f * raw
+                            dy = rise * 0.6f * arriving
+                        }
+                        WordMood.CALM -> {
+                            scale = 0.96f + 0.04f * a
+                            dy = rise * 1.4f * arriving
+                        }
+                        WordMood.PLAIN -> {
+                            scale = 0.7f + 0.3f * raw
+                            dy = rise * arriving
+                        }
+                    }
+                    if (pace == LinePace.FAST) dx -= layout.fontPx * 0.5f * arriving
+                    // The word being sung breathes with the bass; sung words step back a little.
+                    val live = if (current) 1f + 0.08f * swell().coerceIn(0f, 1f) else 1f
+                    val topLeft = Offset(originX + word.x + dx, originY + line.y + dy)
+                    val pivot = Offset(topLeft.x + textLayout.size.width / 2f, topLeft.y + textLayout.size.height / 2f)
+                    val shade = a * (1f - 0.2f * rest)
+                    val glow = when {
+                        reduced -> null
+                        mood == WordMood.HOT && (current || arriving > 0f) -> glowHot
+                        mood == WordMood.ENERGY && (current || arriving > 0f) -> glowEnergy
+                        mood == WordMood.CALM && current -> glowCalm
+                        current -> glowWhite
+                        else -> null
+                    }
+                    scale(scale * live, scale * live, pivot) {
+                        drawText(textLayout, topLeft = topLeft, alpha = shade, shadow = glow)
                     }
                 }
                 if (waiting) drawText(dots, topLeft = Offset((size.width - dots.size.width) / 2f, (size.height - dots.size.height) / 2f))
@@ -517,6 +603,7 @@ private const val LINE_IN_MS = 180
 private const val LINE_OUT_MS = 140
 /** How long a sung word takes to step back behind the one being sung. */
 private const val WORD_REST_MS = 260
+private const val CALM_IN_MS = 340
 
 /** How much a strong bass hit swells the lyric (D-82): under two percent, felt more than seen. */
 private const val SWELL_SCALE = 0.018f

@@ -413,3 +413,13 @@ fun BuxesText(
         overflow = TextOverflow.Ellipsis,
     )
 }
+
+/**
+ * The faces the lyrics use for a word's mood (Buxes): a heavy block for a shouted or hot word, a
+ * slanted bold for an energetic one, a round soft face for a calm one. Never a script.
+ */
+object MoodFaces {
+    val Heavy: FontFamily get() = ArchivoBlack
+    val Slanted: FontFamily get() = InstrumentSansItalic
+    val Soft: FontFamily get() = Nunito
+}

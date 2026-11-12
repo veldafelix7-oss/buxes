@@ -442,9 +442,11 @@ fun CoverFlowScreen(repository: LibraryRepository, onOpen: (AlbumId) -> Unit) {
                     },
                 ),
         ) {
-            val window = (middle - 4)..(middle + 4)
+            // Buxes: seven covers in the air (not nine), and none drawn once it has faded — lighter on the phone.
+            val window = (middle - 3)..(middle + 3)
             for (i in window) {
                 val album = albums.getOrNull(i) ?: continue
+                if (abs(i - position.value) >= 3.4f) continue
                 Box(
                     Modifier
                         .zIndex(-abs(i - middle).toFloat())
@@ -461,7 +463,7 @@ fun CoverFlowScreen(repository: LibraryRepository, onOpen: (AlbumId) -> Unit) {
                             val s = 1f - 0.16f * abs(near)
                             scaleX = s
                             scaleY = s
-                            alpha = (1f - (abs(d) - 2.5f).coerceAtLeast(0f)).coerceIn(0f, 1f)
+                            alpha = (1f - (abs(d) - 2.2f).coerceAtLeast(0f) / 1.2f).coerceIn(0f, 1f)
                         }
                         .pointerInput(i) {
                             detectTapGestures { if (i == focus.focusedIndex) onOpen(album.id) else focus.focus(i) }
