@@ -1,24 +1,15 @@
 package app.buxes.feature.settings
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.buxes.core.designsystem.component.FocusList
 import app.buxes.core.designsystem.component.ListInputEffect
@@ -26,31 +17,18 @@ import app.buxes.core.designsystem.component.LocalMiniature
 import app.buxes.core.designsystem.component.LocalScreenInsets
 import app.buxes.core.designsystem.component.MenuPreview
 import app.buxes.core.designsystem.component.MenuRow
-import app.buxes.core.designsystem.component.MessageState
-import app.buxes.core.designsystem.component.ProgressBar
 import app.buxes.core.designsystem.shell.DeviceAppearance
-import app.buxes.core.designsystem.symbol.BuxesSymbol
-import app.buxes.core.designsystem.theme.DisplayTheme
-import app.buxes.core.designsystem.theme.DisplayBackground
 import app.buxes.core.designsystem.theme.LocalBuxesType
 import app.buxes.core.designsystem.theme.LyricsTheme
 import app.buxes.core.designsystem.theme.BuxesTheme
-import app.buxes.core.designsystem.theme.Spacing
-import app.buxes.core.designsystem.theme.TextContrast
 import app.buxes.core.designsystem.type.DisplayFont
 import app.buxes.core.designsystem.type.LyricsFont
 import app.buxes.core.designsystem.type.LyricsTypeface
 import app.buxes.core.designsystem.type.LocalTypographyPreset
-import app.buxes.core.designsystem.type.BuxesText
 import app.buxes.core.designsystem.type.TypographyPreset
 import app.buxes.core.interaction.FocusListState
-import app.buxes.core.interaction.InputTargetEffect
-import app.buxes.core.interaction.BuxesInput
-import app.buxes.core.interaction.WheelButton
-import app.buxes.core.interaction.WheelContext
 import app.buxes.core.interaction.rememberFocusListState
 import app.buxes.core.interaction.rememberBuxesHaptics
-import kotlin.math.roundToInt
 
 /*
  * Settings ▸ Appearance (D-41, BUXES_CUSTOMIZATION.md §8): the device body (finish, grain, glitter)
@@ -58,253 +36,24 @@ import kotlin.math.roundToInt
  * are tried on the device itself as the Wheel turns; Center keeps them, Menu puts the old look back.
  */
 
-/** A 0–1 level in Appearance, edited with the Wheel and previewed live ([LevelScreen]). */
-enum class AppearanceLevel(val label: String, val step: Float) {
-    Grain("Grain", 0.04f),
-    GlitterAmount("Glitter amount", 0.05f),
-    GlitterGlow("Glitter glow", 0.05f),
-    GlitterDensity("Glitter density", 0.05f),
-    GlitterSize("Glitter size", 0.05f),
-    GlitterOpacity("Glitter opacity", 0.05f),
-    BackgroundOpacity("Background opacity", 0.05f),
-    ;
-
-    fun read(a: DeviceAppearance): Float = when (this) {
-        Grain -> a.grain
-        GlitterAmount -> a.glitter.amount
-        GlitterGlow -> a.glitter.glow
-        GlitterDensity -> a.glitter.density
-        GlitterSize -> a.glitter.size
-        GlitterOpacity -> a.glitter.opacity
-        BackgroundOpacity -> a.screen.imageOpacity
-    }
-
-    fun write(a: DeviceAppearance, value: Float): DeviceAppearance {
-        val v = value.coerceIn(0f, 1f)
-        return when (this) {
-            Grain -> a.copy(grain = v)
-            GlitterAmount -> a.copy(glitter = a.glitter.copy(amount = v))
-            GlitterGlow -> a.copy(glitter = a.glitter.copy(glow = v))
-            GlitterDensity -> a.copy(glitter = a.glitter.copy(density = v))
-            GlitterSize -> a.copy(glitter = a.glitter.copy(size = v))
-            GlitterOpacity -> a.copy(glitter = a.glitter.copy(opacity = v))
-            BackgroundOpacity -> a.copy(screen = a.screen.copy(imageOpacity = v))
-        }
-    }
-
-    /** Why this level can't be adjusted right now (title, next step), or null when it can. */
-    fun unavailable(a: DeviceAppearance): Pair<String, String>? = when (this) {
-        Grain -> if (a.isGlass) "Grain needs a solid finish" to "Choose a finish other than Glass, then come back here." else null
-        GlitterAmount, GlitterGlow, GlitterDensity, GlitterSize, GlitterOpacity -> when {
-            a.isGlass -> "Glitter needs a solid finish" to "Choose a finish other than Glass, then come back here."
-            !a.glitter.enabled -> "Glitter is off" to "Turn Glitter on in Device body, then come back here."
-            else -> null
-        }
-        BackgroundOpacity -> if (a.screen.backgroundFor(a.display) != DisplayBackground.IMAGE) {
-            "No background picture" to "Choose Image under Background first."
-        } else null
-    }
-}
-
-/** Whether the chosen background picture can be shown (the app reads it). */
+/** Whether the display has a picture of its own to show (kept for the display pipeline). */
 enum class BackgroundImageStatus { NONE, READY, UNAVAILABLE }
 
-private enum class AppearanceRow { DeviceBody, VirtualDisplay }
+private enum class DisplayRow { Font, LyricsFont, LyricsTheme }
 
-/** Settings ▸ Appearance: the body, and the display inside it. */
+/** Settings ▸ Appearance (Buxes): one look; only the fonts and the lyrics style are chosen. */
 @Composable
-fun AppearanceScreen(repository: DeviceSettingsRepository, onDeviceBody: () -> Unit, onVirtualDisplay: () -> Unit) {
+fun AppearanceScreen(repository: DeviceSettingsRepository, onFont: () -> Unit, onLyricsFont: () -> Unit, onLyricsTheme: () -> Unit) {
     val appearance by repository.appearance.collectAsStateWithLifecycle()
-    val rows = AppearanceRow.entries
     val focus = rememberFocusListState("appearance")
-    val canvas = BuxesTheme.colors.canvas
-    val activate: (Int) -> Unit = { index ->
-        when (rows[index]) {
-            AppearanceRow.DeviceBody -> onDeviceBody()
-            AppearanceRow.VirtualDisplay -> onVirtualDisplay()
-        }
-    }
-    ListInputEffect(focus, onActivate = activate)
-    FocusList(
-        items = rows,
-        state = focus,
-        key = { it },
-        contentPadding = LocalScreenInsets.current.listPadding(),
-        onActivate = activate,
-        preview = { row ->
-            when (row) {
-                AppearanceRow.DeviceBody -> appearance.baseArgb?.let { MenuPreview.Swatch(Color(it)) } ?: MenuPreview.Instrument
-                AppearanceRow.VirtualDisplay -> MenuPreview.Swatch(canvas)
-            }
-        },
-        modifier = Modifier.fillMaxSize(),
-    ) { row, _, focused ->
-        when (row) {
-            // The glimpse beyond the arc shows each half; the paper column is too narrow for summaries.
-            AppearanceRow.DeviceBody -> MenuRow("Device body", focused)
-            AppearanceRow.VirtualDisplay -> MenuRow("Virtual display", focused)
-        }
-    }
-}
-
-private enum class BodyRow { Finish, CustomColor, Grain, Glitter, GlitterAmount, GlitterGlow, GlitterTilt, GlitterDensity, GlitterSize, GlitterOpacity }
-
-/** Settings ▸ Appearance ▸ Device body: finish, grain and glitter. */
-@Composable
-fun DeviceBodyScreen(
-    repository: DeviceSettingsRepository,
-    onFinish: () -> Unit,
-    onCustomColor: () -> Unit,
-    onLevel: (AppearanceLevel) -> Unit,
-) {
-    val appearance by repository.appearance.collectAsStateWithLifecycle()
-    val haptics = rememberBuxesHaptics()
-    val rows = BodyRow.entries
-    val focus = rememberFocusListState("device-body")
-    val industrial = appearance.display.isIndustrial
-    val solid = !appearance.isGlass
-    val glitterOn = solid && appearance.glitter.enabled
-    fun level(level: AppearanceLevel) = if (level.unavailable(appearance) != null) haptics.reject() else onLevel(level)
-    val activate: (Int) -> Unit = { index ->
-        when (rows[index]) {
-            BodyRow.Finish -> if (industrial) haptics.reject() else onFinish()
-            BodyRow.CustomColor -> if (industrial) haptics.reject() else onCustomColor()
-            BodyRow.Grain -> level(AppearanceLevel.Grain)
-            BodyRow.Glitter -> if (!solid) haptics.reject() else {
-                haptics.confirm()
-                repository.setAppearance(appearance.copy(glitter = appearance.glitter.copy(enabled = !appearance.glitter.enabled)))
-            }
-            BodyRow.GlitterAmount -> level(AppearanceLevel.GlitterAmount)
-            BodyRow.GlitterGlow -> level(AppearanceLevel.GlitterGlow)
-            BodyRow.GlitterDensity -> level(AppearanceLevel.GlitterDensity)
-            BodyRow.GlitterSize -> level(AppearanceLevel.GlitterSize)
-            BodyRow.GlitterOpacity -> level(AppearanceLevel.GlitterOpacity)
-            BodyRow.GlitterTilt -> if (!glitterOn) haptics.reject() else {
-                haptics.confirm()
-                repository.setAppearance(appearance.copy(glitter = appearance.glitter.copy(tilt = !appearance.glitter.tilt)))
-            }
-        }
-    }
-    ListInputEffect(focus, onActivate = activate)
-    FocusList(
-        items = rows,
-        state = focus,
-        key = { it },
-        contentPadding = LocalScreenInsets.current.listPadding(),
-        onActivate = activate,
-        preview = { row ->
-            when (row) {
-                BodyRow.Finish -> appearance.baseArgb?.let { MenuPreview.Swatch(Color(it)) } ?: MenuPreview.Instrument
-                BodyRow.CustomColor -> MenuPreview.Swatch(Color(appearance.customArgb))
-                else -> MenuPreview.Instrument
-            }
-        },
-        modifier = Modifier.fillMaxSize(),
-    ) { row, _, focused ->
-        when (row) {
-            BodyRow.Finish -> MenuRow(
-                "Finish",
-                focused,
-                // Carbon comes in blackened steel (D-101); Bone and Custom in matte black hardware (D-29).
-                value = when {
-                    appearance.display == DisplayTheme.CARBON -> "Blackened steel"
-                    industrial -> "Matte black"
-                    else -> appearance.preset.label
-                },
-                enabled = !industrial,
-                showChevron = !industrial,
-            )
-            BodyRow.CustomColor -> MenuRow(
-                "Custom color",
-                focused,
-                leadingContent = { Swatch(Color(appearance.customArgb)) },
-                enabled = !industrial,
-                showChevron = !industrial,
-            )
-            BodyRow.Grain -> MenuRow("Grain", focused, value = if (solid) percent(appearance.grain) else "Solid finishes only", enabled = solid, showChevron = solid)
-            BodyRow.Glitter -> MenuRow(
-                "Glitter",
-                focused,
-                value = if (!solid) "Solid finishes only" else if (appearance.glitter.enabled) "On" else "Off",
-                enabled = solid,
-                showChevron = false,
-            )
-            BodyRow.GlitterAmount -> MenuRow("Glitter amount", focused, value = percent(appearance.glitter.amount), enabled = glitterOn, showChevron = glitterOn)
-            BodyRow.GlitterGlow -> MenuRow("Glitter glow", focused, value = percent(appearance.glitter.glow), enabled = glitterOn, showChevron = glitterOn)
-            // The light on the flakes follows the phone's tilt (motion sensors), or stays put.
-            BodyRow.GlitterTilt -> MenuRow("Follow tilt", focused, value = if (appearance.glitter.tilt) "On" else "Off", enabled = glitterOn, showChevron = false)
-            BodyRow.GlitterDensity -> MenuRow("Glitter density", focused, value = percent(appearance.glitter.density), enabled = glitterOn, showChevron = glitterOn)
-            BodyRow.GlitterSize -> MenuRow("Glitter size", focused, value = percent(appearance.glitter.size), enabled = glitterOn, showChevron = glitterOn)
-            BodyRow.GlitterOpacity -> MenuRow("Glitter opacity", focused, value = percent(appearance.glitter.opacity), enabled = glitterOn, showChevron = glitterOn)
-        }
-    }
-}
-
-private enum class DisplayRow { Theme, Font, LyricsFont, LyricsTheme, LyricsBackground, Background, BackgroundColor, BackgroundOpacity, NoBackground, TextContrast }
-
-/** Settings ▸ Appearance ▸ Virtual display: theme, font, background and contrast. */
-@Composable
-fun VirtualDisplayScreen(
-    repository: DeviceSettingsRepository,
-    imageStatus: BackgroundImageStatus,
-    onTheme: () -> Unit,
-    onFont: () -> Unit,
-    onBackground: () -> Unit,
-    onBackgroundColor: () -> Unit,
-    onLevel: (AppearanceLevel) -> Unit,
-    onLyricsFont: () -> Unit = {},
-    onLyricsTheme: () -> Unit = {},
-) {
-    val appearance by repository.appearance.collectAsStateWithLifecycle()
-    val haptics = rememberBuxesHaptics()
-    val focus = rememberFocusListState("virtual-display")
     val screen = appearance.screen
-    // Carbon keeps its own display (D-101): one row says so instead of three that can't be used.
-    val ownDisplay = appearance.display == app.buxes.core.designsystem.theme.DisplayTheme.CARBON
-    val shown = screen.backgroundFor(appearance.display)
-    val rows = DisplayRow.entries.filter { row ->
-        when (row) {
-            // Buxes: no theme, background or contrast choices; the look is one.
-            DisplayRow.Theme, DisplayRow.LyricsBackground, DisplayRow.TextContrast, DisplayRow.BackgroundOpacity, DisplayRow.NoBackground -> false
-            DisplayRow.Background, DisplayRow.BackgroundColor -> false
-            DisplayRow.BackgroundOpacity -> !ownDisplay && shown == DisplayBackground.IMAGE
-            DisplayRow.NoBackground -> ownDisplay
-            // Classic's paper only (D-100): the line theme keeps its own black sheet.
-            DisplayRow.LyricsBackground -> screen.lyricsTheme == app.buxes.core.designsystem.theme.LyricsTheme.CLASSIC
-            else -> true
-        }
-    }
-    val overlay = app.buxes.core.designsystem.component.LocalOverlayHost.current
+    val rows = DisplayRow.entries
     val canvas = BuxesTheme.colors.canvas
     val activate: (Int) -> Unit = { index ->
         when (rows[index]) {
-            DisplayRow.Theme -> onTheme()
             DisplayRow.Font -> onFont()
             DisplayRow.LyricsFont -> onLyricsFont()
             DisplayRow.LyricsTheme -> onLyricsTheme()
-            // Classic's paper (D-100).
-            DisplayRow.LyricsBackground -> {
-                overlay.show(
-                    app.buxes.core.designsystem.component.MenuSpec(
-                        "Lyrics background: ${screen.lyricsBackground.label}",
-                        app.buxes.core.designsystem.theme.LyricsBackground.entries.map { choice ->
-                            app.buxes.core.designsystem.component.MenuAction(lyricsBackgroundChoice(choice)) {
-                                val current = repository.appearance.value
-                                repository.setAppearance(current.copy(screen = current.screen.copy(lyricsBackground = choice)))
-                            }
-                        },
-                    ),
-                )
-            }
-            DisplayRow.Background -> if (ownDisplay) haptics.reject() else onBackground()
-            DisplayRow.BackgroundColor -> if (ownDisplay) haptics.reject() else onBackgroundColor()
-            DisplayRow.BackgroundOpacity -> if (AppearanceLevel.BackgroundOpacity.unavailable(appearance) != null) haptics.reject() else onLevel(AppearanceLevel.BackgroundOpacity)
-            DisplayRow.NoBackground -> haptics.reject()
-            DisplayRow.TextContrast -> {
-                haptics.confirm()
-                val next = if (screen.contrast == TextContrast.STANDARD) TextContrast.HIGH else TextContrast.STANDARD
-                repository.setAppearance(appearance.copy(screen = screen.copy(contrast = next)))
-            }
         }
     }
     ListInputEffect(focus, onActivate = activate)
@@ -314,29 +63,13 @@ fun VirtualDisplayScreen(
         key = { it },
         contentPadding = LocalScreenInsets.current.listPadding(),
         onActivate = activate,
-        preview = { row ->
-            when (row) {
-                DisplayRow.BackgroundColor -> MenuPreview.Swatch(Color(screen.solidArgb))
-                else -> MenuPreview.Swatch(canvas)
-            }
-        },
+        preview = { MenuPreview.Swatch(canvas) },
         modifier = Modifier.fillMaxSize(),
     ) { row, _, focused ->
         when (row) {
-            DisplayRow.Theme -> MenuRow("Theme", focused, value = appearance.display.label)
             DisplayRow.Font -> MenuRow("Font", focused, value = screen.font.label)
             DisplayRow.LyricsFont -> MenuRow("Lyrics font", focused, value = screen.lyricsFont.label)
             DisplayRow.LyricsTheme -> MenuRow("Lyrics theme", focused, value = screen.lyricsTheme.label)
-            DisplayRow.LyricsBackground -> MenuRow("Lyrics background", focused, value = screen.lyricsBackground.label, showChevron = false)
-            DisplayRow.Background -> MenuRow(
-                "Background",
-                focused,
-                value = if (shown == DisplayBackground.IMAGE && imageStatus == BackgroundImageStatus.UNAVAILABLE) "Unavailable" else shown.label,
-            )
-            DisplayRow.BackgroundColor -> MenuRow("Background color", focused, leadingContent = { Swatch(Color(screen.solidArgb)) })
-            DisplayRow.BackgroundOpacity -> MenuRow("Background opacity", focused, value = percent(screen.imageOpacity))
-            DisplayRow.NoBackground -> MenuRow("Backgrounds come with Glass and Custom", focused, enabled = false, showChevron = false)
-            DisplayRow.TextContrast -> MenuRow("Contrast", focused, value = screen.contrast.label, showChevron = false)
         }
     }
 }
@@ -435,82 +168,6 @@ fun LyricsThemeScreen(repository: DeviceSettingsRepository) {
     }
 }
 
-private enum class BackgroundRow { None, Solid, Image, ChooseImage }
-
-/**
- * Background picker: None (the theme's own display), Solid (the background colour), or a picture
- * chosen with the system photo picker — no storage permission. A picture that can no longer be
- * read shows the solid colour instead and says so here.
- */
-@Composable
-fun BackgroundScreen(repository: DeviceSettingsRepository, imageStatus: BackgroundImageStatus, onChooseImage: () -> Unit) {
-    val appearance by repository.appearance.collectAsStateWithLifecycle()
-    val haptics = rememberBuxesHaptics()
-    val screen = appearance.screen
-    val hasImage = screen.imageUri != null
-    val rows = BackgroundRow.entries.filter { it != BackgroundRow.ChooseImage || hasImage }
-    val focus = remember {
-        FocusListState(
-            initialIndex = when (repository.appearance.value.screen.background) {
-                DisplayBackground.NONE -> 0
-                DisplayBackground.SOLID -> 1
-                DisplayBackground.IMAGE -> 2
-            },
-        )
-    }
-    fun choice(row: BackgroundRow): DisplayBackground? = when (row) {
-        BackgroundRow.None -> DisplayBackground.NONE
-        BackgroundRow.Solid -> DisplayBackground.SOLID
-        BackgroundRow.Image -> if (hasImage) DisplayBackground.IMAGE else null
-        BackgroundRow.ChooseImage -> null
-    }
-    PreviewWhileFocused(repository, focus) { current, index ->
-        rows.getOrNull(index)?.let(::choice)?.let { bg -> if (bg == current.screen.background) null else current.copy(screen = current.screen.copy(background = bg)) }
-    }
-    val activate: (Int) -> Unit = { index ->
-        val row = rows[index]
-        val bg = choice(row)
-        when {
-            bg != null -> {
-                haptics.confirm()
-                val current = repository.appearance.value
-                repository.setAppearance(current.copy(screen = current.screen.copy(background = bg)))
-                repository.setPreview(null)
-            }
-            else -> onChooseImage()
-        }
-    }
-    ListInputEffect(focus, onActivate = activate)
-    FocusList(
-        items = rows,
-        state = focus,
-        key = { it },
-        contentPadding = LocalScreenInsets.current.listPadding(),
-        onActivate = activate,
-        preview = { row -> if (row == BackgroundRow.Solid) MenuPreview.Swatch(Color(screen.solidArgb)) else MenuPreview.None },
-        modifier = Modifier.fillMaxSize(),
-    ) { row, _, focused ->
-        when (row) {
-            BackgroundRow.None -> MenuRow("None", focused, selected = screen.background == DisplayBackground.NONE, showChevron = false)
-            BackgroundRow.Solid -> MenuRow(
-                "Solid",
-                focused,
-                leadingContent = { Swatch(Color(screen.solidArgb)) },
-                selected = screen.background == DisplayBackground.SOLID,
-                showChevron = false,
-            )
-            BackgroundRow.Image -> MenuRow(
-                if (hasImage) "Picture" else "Choose a picture",
-                focused,
-                value = if (hasImage && imageStatus == BackgroundImageStatus.UNAVAILABLE) "Unavailable" else null,
-                selected = hasImage && screen.background == DisplayBackground.IMAGE,
-                showChevron = !hasImage,
-            )
-            BackgroundRow.ChooseImage -> MenuRow("Choose another picture", focused)
-        }
-    }
-}
-
 /**
  * Tries the focused choice on the device while a picker is open ([choose] returns the appearance to
  * preview, or null for "as it is"); the preview ends when the picker closes.
@@ -528,65 +185,3 @@ internal fun PreviewWhileFocused(
     DisposableEffect(Unit) { onDispose { repository.setPreview(null) } }
 }
 
-/** A level (0–1) adjusted with the Wheel and previewed on the device as you turn; Center keeps it. */
-@Composable
-fun LevelScreen(repository: DeviceSettingsRepository, level: AppearanceLevel) {
-    val colors = BuxesTheme.colors
-    val type = BuxesTheme.type
-    val insets = LocalScreenInsets.current
-    val haptics = rememberBuxesHaptics()
-    val appearance = remember { repository.appearance.value }
-    var value by remember { mutableFloatStateOf(level.read(appearance)) }
-    if (!LocalMiniature.current) DisposableEffect(Unit) { onDispose { repository.setPreview(null) } }
-    val blocked = level.unavailable(appearance)
-    if (blocked != null) {
-        Box(Modifier.fillMaxSize().padding(top = insets.top, bottom = insets.bottom), contentAlignment = Alignment.Center) {
-            MessageState(BuxesSymbol.Settings, blocked.first, blocked.second)
-        }
-        return
-    }
-    InputTargetEffect(WheelContext.VOLUME) { input ->
-        when (input) {
-            is BuxesInput.Rotate -> {
-                val next = (value + input.detents * level.step).coerceIn(0f, 1f)
-                if (next == value) haptics.boundary()
-                value = next
-                repository.setPreview(level.write(appearance, value))
-                true
-            }
-            is BuxesInput.Press -> if (input.button == WheelButton.CENTER) {
-                repository.setAppearance(level.write(appearance, value))
-                repository.setPreview(null)
-                haptics.confirm()
-                true
-            } else false
-            else -> false
-        }
-    }
-    Column(
-        Modifier.fillMaxSize().padding(top = insets.top, bottom = insets.bottom).padding(horizontal = Spacing.xxl),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        BuxesText(percent(value), type.largeTitle, colors.labelPrimary)
-        Spacer(Modifier.height(Spacing.l))
-        ProgressBar({ value }, running = false, emphasized = true)
-        Spacer(Modifier.height(Spacing.l))
-        BuxesText(
-            "Turn the wheel to adjust. Press the center to keep it.",
-            type.footnote,
-            colors.labelSecondary,
-            maxLines = 2,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-        )
-    }
-}
-
-internal fun percent(value: Float) = "${(value * 100).roundToInt()}%"
-
-/** A choice in the lyrics background menu (D-100). */
-private fun lyricsBackgroundChoice(choice: app.buxes.core.designsystem.theme.LyricsBackground): String = when (choice) {
-    app.buxes.core.designsystem.theme.LyricsBackground.AUTOMATIC -> "Automatic: turns with each line"
-    app.buxes.core.designsystem.theme.LyricsBackground.BLACK -> "Always black"
-    app.buxes.core.designsystem.theme.LyricsBackground.WHITE -> "Always white"
-}

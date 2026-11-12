@@ -12,7 +12,6 @@ import app.buxes.core.common.Outcome
 import app.buxes.core.common.BuxesError
 import app.buxes.core.model.PlaybackRoute
 import app.buxes.player.api.RemoteAccess
-import app.buxes.player.remote.MediaSessionRemotePlayback
 import app.buxes.sources.api.AccountIdentity
 import app.buxes.sources.api.AuthState
 import app.buxes.sources.api.Basis
@@ -98,13 +97,13 @@ class AppOnlineServiceSettings(private val graph: AppGraph) : OnlineServiceSetti
         graph.appScope.launch { graph.online.signOut() }
     }
 
-    override fun installApp() = start(MediaSessionRemotePlayback.installIntent(app.buxes.sources.youtubemusic.YouTubeMusicSource.PROVIDER_APP_PACKAGE))
+    override fun installApp() = Unit
 
     override fun openApp() = graph.remotePlayback.openApp()
 
-    override fun allowControl() = start(MediaSessionRemotePlayback.accessSettingsIntent(context))
+    override fun allowControl() = Unit
 
-    override fun openAppInfo() = start(MediaSessionRemotePlayback.appInfoIntent(context))
+    override fun openAppInfo() = Unit
 
     override fun setStayInBuxes(enabled: Boolean) = graph.deviceSettings.setStayInBuxes(enabled)
 

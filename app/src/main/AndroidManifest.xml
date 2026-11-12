@@ -10,12 +10,6 @@
          left to the browser. REQUEST_INSTALL_PACKAGES is deliberately not asked for: Play Protect in
          some regions (Indonesia among them) blocks sideloaded apps that hold it outright. -->
 
-    <!-- Remote playback (YOUTUBE_MUSIC_ARCHITECTURE §8): Buxes needs to see whether the app that
-         plays online songs is installed, and to open it on a song. -->
-    <queries>
-        <package android:name="com.google.android.apps.youtube.music" />
-    </queries>
-
     <application
         android:name=".BuxesApplication"
         android:allowBackup="false"

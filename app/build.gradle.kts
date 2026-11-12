@@ -88,12 +88,10 @@ dependencies {
     implementation(project(":sources:local"))
     implementation(project(":player:api"))
     implementation(project(":player:service"))
-    implementation(project(":player:remote"))
     implementation(project(":feature:library"))
     implementation(project(":feature:online"))
     implementation(project(":sources:youtubemusic"))
     // Custom sources (D-91): addons the listener adds for their streams.
-    implementation(project(":sources:addon"))
     implementation(libs.kotlinx.serialization.json)
     // The online source's backup apps run YouTube's player script in a sandbox (D-98).
     implementation(libs.androidx.javascriptengine)
@@ -101,7 +99,6 @@ dependencies {
     implementation(project(":feature:nowplaying"))
     implementation(project(":feature:settings"))
     // Deterministic generated test tones: debug builds only, never shipped.
-    debugImplementation(project(":sources:test"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
@@ -126,7 +123,6 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.kotlin.test)
     androidTestImplementation(libs.kotlinx.coroutines.test)
-    androidTestImplementation(project(":sources:test"))
 }
 
 configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configureEach {

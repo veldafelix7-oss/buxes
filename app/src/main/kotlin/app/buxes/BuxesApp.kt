@@ -172,15 +172,8 @@ import app.buxes.feature.online.OnlineActions
 import app.buxes.feature.online.OnlinePlace
 import app.buxes.feature.online.OnlineScreen
 import app.buxes.feature.online.showAddToPlaylist
-import app.buxes.feature.settings.AppearanceLevel
 import app.buxes.feature.settings.AppearanceScreen
-import app.buxes.feature.settings.BackgroundScreen
-import app.buxes.feature.settings.ColorTarget
-import app.buxes.feature.settings.CustomColorScreen
-import app.buxes.feature.settings.DeviceBodyScreen
-import app.buxes.feature.settings.FinishScreen
 import app.buxes.feature.settings.FontScreen
-import app.buxes.feature.settings.LevelScreen
 import app.buxes.feature.settings.LyricsFontScreen
 import app.buxes.feature.settings.LyricsThemeScreen
 import app.buxes.space.LocalBuxesSpace
@@ -209,8 +202,6 @@ import app.buxes.space.BuxesSpace
 import app.buxes.feature.settings.MusicFoldersScreen
 import app.buxes.feature.settings.OnlineServiceScreen
 import app.buxes.feature.settings.SettingsScreen
-import app.buxes.feature.settings.ThemeScreen
-import app.buxes.feature.settings.VirtualDisplayScreen
 import app.buxes.player.api.PlayIntent
 import app.buxes.player.api.PlaybackController
 import app.buxes.player.api.PlaybackSnapshot
@@ -255,23 +246,13 @@ sealed interface Dest {
 
     /** Settings ▸ Appearance (D-41) and its two halves. */
     data object Appearance : Dest
-    data object DeviceBody : Dest
-    data object VirtualDisplay : Dest
-    data object Theme : Dest
     data object Font : Dest
     data object LyricsFont : Dest
 
     /** Settings ▸ Appearance ▸ Virtual display ▸ Lyrics theme (D-81). */
     data object LyricsTheme : Dest
-    data object Background : Dest
-    data object Finish : Dest
-    data object CustomColor : Dest
 
-    /** The display's background colour, in the colour editor. */
-    data object DisplayColor : Dest
 
-    /** A 0–1 level edited with the Wheel (grain, glitter, background opacity). */
-    data class Level(val level: AppearanceLevel) : Dest
 
     /** Settings ▸ the online music service (D-38): account, the app that plays, hand-off. */
     data object OnlineSources : Dest
@@ -280,10 +261,6 @@ sealed interface Dest {
     data object OnlineChannel : Dest
 
     /** Settings ▸ Custom sources (D-91), adding one, one source, and one of its text settings. */
-    data object CustomSources : Dest
-    data object AddCustomSource : Dest
-    data class CustomSource(val id: String) : Dest
-    data class CustomSourceOption(val id: String, val key: String) : Dest
     data class Album(val id: AlbumId) : Dest
     data class Artist(val id: ArtistId) : Dest
 
@@ -300,9 +277,8 @@ sealed interface Dest {
 
 private val fixedDests = listOf(
     Dest.Home, Dest.Music, Dest.CoverFlow, Dest.Albums, Dest.Artists, Dest.Songs, Dest.Favorites, Dest.Playlists, Dest.NowPlaying,
-    Dest.UpNext, Dest.Lyrics, Dest.Settings, Dest.Appearance, Dest.DeviceBody, Dest.VirtualDisplay, Dest.Theme, Dest.Font,
-    Dest.LyricsFont, Dest.LyricsTheme, Dest.Background, Dest.Finish, Dest.CustomColor, Dest.DisplayColor, Dest.OnlineSources, Dest.OnlineChannel, Dest.Equalizer,
-    Dest.CustomSources, Dest.AddCustomSource,
+    Dest.UpNext, Dest.Lyrics, Dest.Settings, Dest.Appearance, Dest.Font,
+    Dest.LyricsFont, Dest.LyricsTheme, Dest.OnlineSources, Dest.OnlineChannel, Dest.Equalizer,
 ).associateBy { it.toString() }
 
 private fun Dest.encode(): String = when (this) {
@@ -310,10 +286,7 @@ private fun Dest.encode(): String = when (this) {
     is Dest.Artist -> "Artist:${id.value}"
     is Dest.MusicFolders -> "MusicFolders:$path"
     is Dest.Online -> "Online:" + OnlinePlace.encode(place)
-    is Dest.Level -> "Level:${level.name}"
     is Dest.EqualizerBand -> "EqualizerBand:$band"
-    is Dest.CustomSource -> "CustomSource:$id"
-    is Dest.CustomSourceOption -> "CustomSourceOption:$id\u0000$key"
     is Dest.Playlist -> "Playlist:$id\u0000$name"
     is Dest.AddSongs -> "AddSongs:$playlistId"
     is Dest.NamePlaylist -> "NamePlaylist:${playlistId.orEmpty()}\u0000$currentName"
@@ -325,12 +298,8 @@ private fun decodeDest(text: String): Dest? = when {
     text.startsWith("Artist:") -> Dest.Artist(ArtistId(text.removePrefix("Artist:")))
     text.startsWith("MusicFolders:") -> Dest.MusicFolders(text.removePrefix("MusicFolders:"))
     text.startsWith("Online:") -> OnlinePlace.decode(text.removePrefix("Online:"))?.let(Dest::Online)
-    text.startsWith("Level:") -> AppearanceLevel.entries.firstOrNull { it.name == text.removePrefix("Level:") }?.let(Dest::Level)
     text.startsWith("EqualizerBand:") -> text.removePrefix("EqualizerBand:").toIntOrNull()
         ?.takeIf { it in app.buxes.player.api.EqualizerSettings.BANDS_HZ.indices }?.let(Dest::EqualizerBand)
-    text.startsWith("CustomSource:") -> Dest.CustomSource(text.removePrefix("CustomSource:"))
-    text.startsWith("CustomSourceOption:") -> text.removePrefix("CustomSourceOption:").split('\u0000').takeIf { it.size == 2 }
-        ?.let { (id, key) -> Dest.CustomSourceOption(id, key) }
     text.startsWith("Playlist:") -> text.removePrefix("Playlist:").split('\u0000', limit = 2).takeIf { it.size == 2 }
         ?.let { (id, name) -> Dest.Playlist(id, name) }
     text.startsWith("AddSongs:") -> Dest.AddSongs(text.removePrefix("AddSongs:"))
@@ -365,26 +334,13 @@ private fun titleOf(dest: Dest, graph: AppGraph): String = when (dest) {
     is Dest.MusicFolders -> if (dest.path.isEmpty()) "Music folders" else dest.path.trimEnd('/').substringAfterLast('/')
     is Dest.Online -> dest.place.title
     Dest.Appearance -> "Appearance"
-    Dest.DeviceBody -> "Device body"
-    Dest.VirtualDisplay -> "Virtual display"
-    Dest.Theme -> "Theme"
     Dest.Font -> "Font"
     Dest.LyricsFont -> "Lyrics font"
     Dest.LyricsTheme -> "Lyrics theme"
-    Dest.Background -> "Background"
-    Dest.Finish -> "Finish"
-    Dest.CustomColor -> "Custom color"
-    Dest.DisplayColor -> "Background color"
-    is Dest.Level -> dest.level.label
     Dest.Equalizer -> "Equaliser"
     is Dest.EqualizerBand -> app.buxes.feature.settings.bandLabel(dest.band)
     Dest.OnlineSources -> graph.onlineService.state.collectAsStateWithLifecycle().value?.name ?: "Online music"
     Dest.OnlineChannel -> "Channel"
-    Dest.CustomSources -> "Custom sources"
-    Dest.AddCustomSource -> "Add a source"
-    is Dest.CustomSource -> graph.customSources.sources.collectAsStateWithLifecycle().value.firstOrNull { it.id == dest.id }?.name ?: "Source"
-    is Dest.CustomSourceOption -> graph.customSources.sources.collectAsStateWithLifecycle().value
-        .firstOrNull { it.id == dest.id }?.options?.firstOrNull { it.key == dest.key }?.label ?: "Setting"
     is Dest.Album -> {
         val album by remember(dest) { graph.library.album(dest.id) }.collectAsStateWithLifecycle(initialValue = null)
         album?.album?.title ?: "Album"
@@ -1016,22 +972,11 @@ private fun PreviousColumn(previous: Dest, current: Dest, graph: AppGraph, navig
         Dest.NowPlaying -> snapshot.item?.trackId?.value
         // Settings rows are keyed by their enum names.
         Dest.Appearance -> "Appearance"
-        Dest.DeviceBody -> "DeviceBody"
-        Dest.VirtualDisplay -> "VirtualDisplay"
-        Dest.Theme -> "Theme"
         Dest.Font -> "Font"
         Dest.LyricsFont -> "LyricsFont"
         Dest.LyricsTheme -> "LyricsTheme"
-        Dest.Background -> "Background"
-        Dest.Finish -> "Finish"
-        Dest.CustomColor -> if (previous == Dest.Finish) "CUSTOM" else "CustomColor"
-        Dest.DisplayColor -> "BackgroundColor"
-        is Dest.Level -> current.level.name
         Dest.Equalizer -> "Equalizer"
         is Dest.EqualizerBand -> "Band(index=${current.band})"
-        Dest.CustomSources -> "CustomSources"
-        is Dest.CustomSource -> current.id
-        is Dest.CustomSourceOption -> "Option:${current.key}"
         else -> titleOf(current, graph)
     }
     val backLabel = "Back to ${titleOf(previous, graph)}"
@@ -1238,88 +1183,23 @@ private fun ScreenContent(
             onEqualizer = { navigator.push(Dest.Equalizer) },
             sleepTimer = graph.sleepTimer,
             onSleepTimer = { overlay.show(sleepTimerMenu(graph.sleepTimer)) },
-            customSources = graph.customSources,
-            onCustomSources = { navigator.push(Dest.CustomSources) },
             softwareUpdate = remember(graph) { app.buxes.update.SoftwareUpdate(graph.updates, checksByItself = !BuildConfig.DEBUG) },
         )
         Dest.Equalizer -> app.buxes.feature.settings.EqualizerScreen(settings, onBand = { navigator.push(Dest.EqualizerBand(it)) })
         is Dest.EqualizerBand -> app.buxes.feature.settings.EqualizerBandScreen(settings, screen.band, onDone = { navigator.pop() })
         Dest.OnlineSources -> OnlineServiceScreen(graph.onlineService, onChannels = { navigator.push(Dest.OnlineChannel) })
         Dest.OnlineChannel -> app.buxes.feature.settings.ServiceChannelScreen(graph.onlineService)
-        Dest.CustomSources -> app.buxes.feature.settings.CustomSourcesScreen(
-            graph.customSources,
-            onAdd = { navigator.push(Dest.AddCustomSource) },
-            onOpen = { navigator.push(Dest.CustomSource(it)) },
-        )
-        Dest.AddCustomSource -> app.buxes.feature.settings.AddCustomSourceScreen(graph.customSources, onAdded = { navigator.pop() })
-        is Dest.CustomSource -> app.buxes.feature.settings.CustomSourceScreen(
-            graph.customSources,
-            screen.id,
-            onEditText = { navigator.push(Dest.CustomSourceOption(screen.id, it)) },
-            onRemoved = { navigator.pop() },
-        )
-        is Dest.CustomSourceOption -> app.buxes.feature.settings.CustomSourceTextOptionScreen(
-            graph.customSources, screen.id, screen.key, onDone = { navigator.pop() },
-        )
         is Dest.MusicFolders -> MusicFoldersScreen(graph.musicFolders, screen.path, onOpen = { navigator.push(Dest.MusicFolders(it)) })
         // Buxes: one look (blue glass). Appearance holds only the fonts and the lyrics style.
-        Dest.Appearance -> {
-            val image by graph.displayImages.state.collectAsStateWithLifecycle()
-            VirtualDisplayScreen(
-                settings,
-                imageStatus = image.status,
-                onTheme = {},
-                onFont = { navigator.push(Dest.Font) },
-                onLyricsFont = { navigator.push(Dest.LyricsFont) },
-                onLyricsTheme = { navigator.push(Dest.LyricsTheme) },
-                onBackground = {},
-                onBackgroundColor = {},
-                onLevel = {},
-            )
-        }
-        Dest.DeviceBody -> DeviceBodyScreen(
+        Dest.Appearance -> AppearanceScreen(
             settings,
-            onFinish = { navigator.push(Dest.Finish) },
-            onCustomColor = { navigator.push(Dest.CustomColor) },
-            onLevel = { navigator.push(Dest.Level(it)) },
+            onFont = { navigator.push(Dest.Font) },
+            onLyricsFont = { navigator.push(Dest.LyricsFont) },
+            onLyricsTheme = { navigator.push(Dest.LyricsTheme) },
         )
-        Dest.VirtualDisplay -> {
-            val image by graph.displayImages.state.collectAsStateWithLifecycle()
-            VirtualDisplayScreen(
-                settings,
-                imageStatus = image.status,
-                onTheme = { navigator.push(Dest.Theme) },
-                onFont = { navigator.push(Dest.Font) },
-                onLyricsFont = { navigator.push(Dest.LyricsFont) },
-                onLyricsTheme = { navigator.push(Dest.LyricsTheme) },
-                onBackground = { navigator.push(Dest.Background) },
-                onBackgroundColor = { navigator.push(Dest.DisplayColor) },
-                onLevel = { navigator.push(Dest.Level(it)) },
-            )
-        }
-        Dest.Theme -> ThemeScreen(settings)
         Dest.Font -> FontScreen(settings)
         Dest.LyricsFont -> LyricsFontScreen(settings)
         Dest.LyricsTheme -> LyricsThemeScreen(settings)
-        Dest.Background -> {
-            val image by graph.displayImages.state.collectAsStateWithLifecycle()
-            // The system photo picker: no storage permission; Buxes keeps only the URI.
-            val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-                if (uri != null) {
-                    val current = settings.appearance.value
-                    graph.displayImages.adopt(uri, previous = current.screen.imageUri)
-                    settings.setAppearance(current.copy(screen = current.screen.copy(background = DisplayBackground.IMAGE, imageUri = uri.toString())))
-                    settings.setPreview(null)
-                }
-            }
-            BackgroundScreen(settings, image.status, onChooseImage = {
-                pick.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-            })
-        }
-        Dest.Finish -> FinishScreen(settings, onCustomColor = { navigator.push(Dest.CustomColor) })
-        Dest.CustomColor -> CustomColorScreen(settings)
-        Dest.DisplayColor -> CustomColorScreen(settings, ColorTarget.DisplayBackground)
-        is Dest.Level -> LevelScreen(settings, screen.level)
     }
 }
 
