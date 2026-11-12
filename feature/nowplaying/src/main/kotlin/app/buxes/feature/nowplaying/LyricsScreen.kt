@@ -515,7 +515,7 @@ private fun Lyric(
                     when (mood) {
                         WordMood.HOT -> {
                             scale = 1f + 0.5f * arriving
-                            dx = sin(raw * 12.6f) * arriving * 7f * density
+                            dx = sin(raw * 12.6f) * arriving * 7f * density.density
                             dy = 0f
                         }
                         WordMood.ENERGY -> {
