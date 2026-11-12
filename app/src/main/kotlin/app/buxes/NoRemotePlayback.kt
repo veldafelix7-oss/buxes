@@ -1,6 +1,6 @@
 package app.buxes
 
-import app.buxes.player.api.PlaybackTarget
+import app.buxes.sources.api.PlaybackTarget
 import app.buxes.player.api.RemoteAccess
 import app.buxes.player.api.RemotePlayback
 import app.buxes.player.api.RemoteSessionState
