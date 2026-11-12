@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-12
+
+### Added
+- Lyrics: words are coloured and set by what they are — red, heavy and in capitals for cursing, anger and shouts; yellow slanted bold for cheers, chants, the chorus and fast lines; green soft for love, comfort and slow lines; white otherwise. English and Indonesian word lists, decided once per line.
+- Lyrics: each kind arrives its own way (slam and shake, big pop, slow drift, pop), fast lines slide in, the sung word breathes with the bass.
+
+### Changed
+- Cover Flow: seven covers in the air instead of nine, faded ones not drawn — lighter on the phone.
+- Release builds drop debug logging.
+
+### Removed
+- Theme, finish, glitter, background and colour settings (the code, not just the rows): Buxes has one look.
+- Remote playback (handing songs to another app), custom add-on sources and the test-tone sources.
+
 ## [1.4.0] - 2026-11-12
 
 ### Added

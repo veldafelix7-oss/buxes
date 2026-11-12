@@ -33,7 +33,6 @@ import app.buxes.sources.api.resolve.StreamResolver
 import app.buxes.sources.local.LocalMusicSource
 import app.buxes.sources.youtubemusic.YouTubeMusicSource
 import app.buxes.player.api.OwnerAwarePlaybackController
-import app.buxes.player.remote.MediaSessionRemotePlayback
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -72,8 +71,7 @@ class AppGraph(val context: Context) {
      * Custom sources (D-91): addons the listener added for their streams. Asked first, in their order,
      * for an EXACT copy of an online song; the song's own source is the fallback. Never in the registry.
      */
-    val customSources = CustomSources(credentials, health, appScope, clock::nowMillis)
-    val resolver = StreamResolver(registry, health, matcher, clock, equivalence = equivalence, preferred = customSources)
+    val resolver = StreamResolver(registry, health, matcher, clock, equivalence = equivalence, preferred = app.buxes.sources.api.resolve.StreamProviders.None)
 
     val libraryStore = LibraryStore(database)
     val catalog = TrackCatalog(registry) { id -> libraryStore.track(id) }
@@ -88,15 +86,8 @@ class AppGraph(val context: Context) {
     /** Which sources are on (D-35): stored, applied once every source is registered. */
     val sourceSettings = SourceSettings(registry, SharedPrefsSourcePreferences(context))
 
-    /** Where Buxes hands YouTube Music songs to play (YOUTUBE_MUSIC_ARCHITECTURE §8): the official app. */
-    val remotePlayback = MediaSessionRemotePlayback(
-        context,
-        appScope,
-        YouTubeMusicSource.PROVIDER_APP_PACKAGE,
-        returnToBuxes = {
-            if (deviceSettings.stayInBuxes.value) Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT) else null
-        },
-    )
+    /** Buxes plays everything itself (no hand-over to another app). */
+    val remotePlayback: app.buxes.player.api.RemotePlayback = NoRemotePlayback
 
     /**
      * ONLINE (D-38, D-48): YouTube Music — its catalogue and the listener's account read here, its
@@ -360,7 +351,7 @@ class AppGraph(val context: Context) {
         override val audioMeter = this@AppGraph.audioMeter
         override val recommendations = this@AppGraph.recommendations
         override val equivalence = this@AppGraph.equivalence
-        override val streamProviders = this@AppGraph.customSources
+        override val streamProviders = app.buxes.sources.api.resolve.StreamProviders.None
         override suspend fun playedSince(sinceMillis: Long) = onlineStore.playedSince(sinceMillis)
 
         override fun sessionActivity(context: Context): PendingIntent = PendingIntent.getActivity(

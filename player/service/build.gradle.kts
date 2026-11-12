@@ -18,7 +18,6 @@ dependencies {
     implementation(libs.androidx.core.ktx)
 
     testImplementation(testFixtures(project(":sources:api")))
-    testImplementation(project(":sources:test"))
     testImplementation(libs.media3.test.utils)
     testImplementation(libs.media3.test.utils.robolectric)
 }

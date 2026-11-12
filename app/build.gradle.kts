@@ -20,8 +20,8 @@ android {
         // Provisional: the product name is pending trademark clearance (docs/repository-audit.md §5).
         applicationId = "app.buxes"
         // A device test of the updater (D-99) builds a "newer" copy: -Pbuxes.versionCode=7 -Pbuxes.versionName=0.1.5.1
-        versionCode = providers.gradleProperty("buxes.versionCode").orNull?.toInt() ?: 7
-        versionName = providers.gradleProperty("buxes.versionName").orNull ?: "1.4.0"
+        versionCode = providers.gradleProperty("buxes.versionCode").orNull?.toInt() ?: 8
+        versionName = providers.gradleProperty("buxes.versionName").orNull ?: "1.5.0"
     }
     buildFeatures {
         buildConfig = true
@@ -88,12 +88,10 @@ dependencies {
     implementation(project(":sources:local"))
     implementation(project(":player:api"))
     implementation(project(":player:service"))
-    implementation(project(":player:remote"))
     implementation(project(":feature:library"))
     implementation(project(":feature:online"))
     implementation(project(":sources:youtubemusic"))
     // Custom sources (D-91): addons the listener adds for their streams.
-    implementation(project(":sources:addon"))
     implementation(libs.kotlinx.serialization.json)
     // The online source's backup apps run YouTube's player script in a sandbox (D-98).
     implementation(libs.androidx.javascriptengine)
@@ -101,7 +99,6 @@ dependencies {
     implementation(project(":feature:nowplaying"))
     implementation(project(":feature:settings"))
     // Deterministic generated test tones: debug builds only, never shipped.
-    debugImplementation(project(":sources:test"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
@@ -126,7 +123,6 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.kotlin.test)
     androidTestImplementation(libs.kotlinx.coroutines.test)
-    androidTestImplementation(project(":sources:test"))
 }
 
 configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configureEach {

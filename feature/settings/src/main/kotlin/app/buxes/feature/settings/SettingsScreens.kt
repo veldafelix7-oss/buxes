@@ -71,7 +71,7 @@ import app.buxes.core.interaction.WheelContext
 import app.buxes.core.interaction.rememberFocusListState
 import app.buxes.core.interaction.rememberBuxesHaptics
 
-private enum class SettingsRow { Appearance, BuxesSpace, FullScreen, TitleBarBattery, NowPlayingLayout, HideNowPlayingTray, Keyboard, MusicFolders, OnlineSources, CustomSources, Autoplay, Recommendations, AvoidRepeats, Crossfade, Equalizer, SleepTimer, OnlineLyrics, LyricsCredit, Haptics, Clicks, StartupSound, SoftwareUpdate }
+private enum class SettingsRow { Appearance, BuxesSpace, FullScreen, TitleBarBattery, NowPlayingLayout, HideNowPlayingTray, Keyboard, MusicFolders, OnlineSources, Autoplay, Recommendations, AvoidRepeats, Crossfade, Equalizer, SleepTimer, OnlineLyrics, LyricsCredit, Haptics, Clicks, StartupSound, SoftwareUpdate }
 
 /** Settings ▸ Software update (D-99): the version, a check now, and whether Buxes checks by itself. */
 interface SoftwareUpdateSettings {
@@ -106,8 +106,6 @@ fun SettingsScreen(
     sleepTimer: SleepTimer? = null,
     onSleepTimer: () -> Unit = {},
     /** Settings ▸ Custom sources (D-91): the listener's own stream sources; null in a build without online music. */
-    customSources: CustomSourcesSettings? = null,
-    onCustomSources: () -> Unit = {},
     /** Settings ▸ Software update (D-99); null in a build that can't check. */
     softwareUpdate: SoftwareUpdateSettings? = null,
 ) {
@@ -128,7 +126,6 @@ fun SettingsScreen(
     val selection by folders.selection.collectAsStateWithLifecycle()
     val service by onlineService.state.collectAsStateWithLifecycle()
     val effects by repository.effects.collectAsStateWithLifecycle()
-    val customList by (customSources?.sources ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyList<CustomSourceState>()) }).collectAsStateWithLifecycle()
     val overlay = app.buxes.core.designsystem.component.LocalOverlayHost.current
     val sleepState by (sleepTimer?.state ?: remember { kotlinx.coroutines.flow.MutableStateFlow<SleepTimerState>(SleepTimerState.Off) }).collectAsStateWithLifecycle()
     val sleepSummary by androidx.compose.runtime.produceState(SleepTimerText.summary(sleepState, sleepTimer?.remainingMs()), sleepState) {
@@ -150,7 +147,6 @@ fun SettingsScreen(
     // Only a build with an online service has anything to choose there.
     val rows = SettingsRow.entries.filter {
         (it != SettingsRow.OnlineSources || service != null) &&
-            (it != SettingsRow.CustomSources || (service != null && customSources != null)) &&
             (it != SettingsRow.SleepTimer || sleepTimer != null) &&
             (it != SettingsRow.SoftwareUpdate || softwareUpdate != null)
     }
@@ -182,7 +178,6 @@ fun SettingsScreen(
             }
             SettingsRow.MusicFolders -> onMusicFolders()
             SettingsRow.OnlineSources -> onOnlineService()
-            SettingsRow.CustomSources -> onCustomSources()
             SettingsRow.Autoplay -> {
                 haptics.toggle(on = !autoplayOn)
                 repository.setAutoplay(!autoplayOn)
@@ -303,7 +298,6 @@ fun SettingsScreen(
                 },
             )
             SettingsRow.OnlineSources -> MenuRow(service?.name ?: "Online music", focused, value = onlineServiceSummary(service))
-            SettingsRow.CustomSources -> MenuRow("Custom sources", focused, value = customSourcesSummary(customList))
             SettingsRow.Autoplay -> MenuRow("Autoplay", focused, value = if (autoplayOn) "On" else "Off", showChevron = false)
             SettingsRow.Recommendations -> MenuRow("Online recommendations", focused, value = if (recommendationsOn) "On" else "Off", enabled = autoplayOn, showChevron = false)
             SettingsRow.AvoidRepeats -> MenuRow("Avoid repeats", focused, value = if (avoidRepeatsOn) "On" else "Off", enabled = autoplayOn, showChevron = false)
@@ -329,272 +323,6 @@ fun SettingsScreen(
 
 /** "2 seconds", "12 seconds". */
 internal fun crossfadeLabel(seconds: Int): String = if (seconds == 1) "1 second" else "$seconds seconds"
-
-/**
- * Finish picker. Turning the wheel tries each finish on the device itself; the center keeps it,
- * Menu puts the old one back (and goes back). "Custom color" opens the colour editor.
- */
-@Composable
-fun FinishScreen(repository: DeviceSettingsRepository, onCustomColor: () -> Unit) {
-    val appearance by repository.appearance.collectAsStateWithLifecycle()
-    val presets = FinishPreset.entries
-    val focus = remember { FocusListState(initialIndex = presets.indexOf(repository.appearance.value.preset)) }
-    val miniature = LocalMiniature.current
-    if (!miniature) LaunchedEffect(focus) {
-        snapshotFlow { focus.focusedIndex }.collect { index ->
-            val preset = presets.getOrNull(index) ?: return@collect
-            val current = repository.appearance.value
-            repository.setPreview(if (preset == current.preset) null else current.copy(preset = preset))
-        }
-    }
-    if (!LocalMiniature.current) DisposableEffect(Unit) { onDispose { repository.setPreview(null) } }
-    val activate: (Int) -> Unit = { index ->
-        val preset = presets[index]
-        if (preset == FinishPreset.CUSTOM) {
-            onCustomColor()
-        } else {
-            // Choosing keeps you here with the check on your choice; Menu goes back.
-            repository.setAppearance(repository.appearance.value.copy(preset = preset))
-            repository.setPreview(null)
-        }
-    }
-    ListInputEffect(focus, onActivate = activate)
-    val dark = BuxesTheme.colors.isDark
-    FocusList(
-        items = presets,
-        state = focus,
-        key = { it },
-        contentPadding = LocalScreenInsets.current.listPadding(),
-        onActivate = activate,
-        preview = { preset -> DeviceAppearance(preset, customArgb = appearance.customArgb).baseArgb?.let { MenuPreview.Swatch(Color(it)) } ?: MenuPreview.Instrument },
-        modifier = Modifier.fillMaxSize(),
-    ) { preset, _, focused ->
-        val swatch = when (preset) {
-            FinishPreset.GLASS -> null
-            FinishPreset.CUSTOM -> Color(appearance.customArgb)
-            else -> DeviceAppearance(preset).palette(dark).bodyTop
-        }
-        MenuRow(
-            preset.label,
-            focused,
-            leadingContent = { Swatch(swatch) },
-            selected = preset == appearance.preset,
-            showChevron = preset == FinishPreset.CUSTOM,
-        )
-    }
-}
-
-/**
- * Theme picker (D-29, D-41): Glass, the matte instrument looks Carbon and Bone, or Custom (the same
- * instrument on your own background). Turning the wheel tries each one on the whole device; Center
- * keeps it, Menu puts the old one back.
- */
-@Composable
-fun ThemeScreen(repository: DeviceSettingsRepository) {
-    val appearance by repository.appearance.collectAsStateWithLifecycle()
-    val themes = DisplayTheme.entries
-    val focus = remember { FocusListState(initialIndex = themes.indexOf(repository.appearance.value.display)) }
-    val miniature = LocalMiniature.current
-    if (!miniature) LaunchedEffect(focus) {
-        snapshotFlow { focus.focusedIndex }.collect { index ->
-            val theme = themes.getOrNull(index) ?: return@collect
-            val current = repository.appearance.value
-            repository.setPreview(if (theme == current.display) null else current.copy(display = theme))
-        }
-    }
-    if (!LocalMiniature.current) DisposableEffect(Unit) { onDispose { repository.setPreview(null) } }
-    val activate: (Int) -> Unit = { index ->
-        repository.setAppearance(repository.appearance.value.copy(display = themes[index]))
-        repository.setPreview(null)
-    }
-    ListInputEffect(focus, onActivate = activate)
-    FocusList(
-        items = themes,
-        state = focus,
-        key = { it },
-        contentPadding = LocalScreenInsets.current.listPadding(),
-        onActivate = activate,
-        preview = { theme ->
-            when (theme) {
-                DisplayTheme.GLASS -> MenuPreview.Instrument
-                DisplayTheme.CARBON -> MenuPreview.Swatch(CarbonColors.canvas)
-                DisplayTheme.CUSTOM -> MenuPreview.Swatch(Color(appearance.screen.solidArgb))
-            }
-        },
-        modifier = Modifier.fillMaxSize(),
-    ) { theme, _, focused ->
-        MenuRow(
-            theme.label,
-            focused,
-            leadingContent = {
-                Swatch(
-                    when (theme) {
-                        DisplayTheme.GLASS -> null
-                        DisplayTheme.CARBON -> CarbonColors.canvas
-                        DisplayTheme.CUSTOM -> Color(appearance.screen.solidArgb)
-                    },
-                )
-            },
-            selected = theme == appearance.display,
-            showChevron = false,
-        )
-    }
-}
-
-/** What the colour editor colours: the body's Custom finish, or the display's background. */
-enum class ColorTarget { Finish, DisplayBackground }
-
-/**
- * Custom colour editor: type a hex code, or turn the wheel to walk the hue. The device previews
- * the colour as it changes; the center (or the button) applies it — as the Custom finish, or as
- * the display's background colour (which turns a Glass display's background to Solid if it had
- * none, so the choice shows).
- */
-@Composable
-fun CustomColorScreen(repository: DeviceSettingsRepository, target: ColorTarget = ColorTarget.Finish) {
-    val colors = BuxesTheme.colors
-    val type = BuxesTheme.type
-    val insets = LocalScreenInsets.current
-    val haptics = rememberBuxesHaptics()
-    val focusManager = LocalFocusManager.current
-    val appearance = remember { repository.appearance.value }
-    val initial = if (target == ColorTarget.Finish) appearance.customArgb else appearance.screen.solidArgb
-    var text by remember { mutableStateOf(formatHex(initial).drop(1)) }
-    var invalid by remember { mutableStateOf(false) }
-    var argb by remember { mutableIntStateOf(initial) }
-    var hsv by remember { mutableStateOf(Hsv.of(initial)) }
-    var channel by remember { mutableStateOf(ColorChannel.HUE) }
-    fun choose(next: Hsv) {
-        hsv = next
-        argb = next.argb
-        text = formatHex(argb).drop(1)
-        invalid = false
-    }
-    fun applied(color: Int): DeviceAppearance = when (target) {
-        ColorTarget.Finish -> appearance.copy(preset = FinishPreset.CUSTOM, customArgb = color)
-        ColorTarget.DisplayBackground -> appearance.copy(
-            screen = appearance.screen.copy(
-                solidArgb = color,
-                background = if (appearance.screen.background == DisplayBackground.NONE) DisplayBackground.SOLID else appearance.screen.background,
-            ),
-        )
-    }
-
-    val miniature = LocalMiniature.current
-    if (!miniature) {
-        LaunchedEffect(argb) { repository.setPreview(applied(argb)) }
-        if (!LocalMiniature.current) DisposableEffect(Unit) { onDispose { repository.setPreview(null) } }
-    }
-
-    val apply = {
-        repository.setAppearance(applied(argb))
-        repository.setPreview(null)
-        haptics.confirm()
-        focusManager.clearFocus()
-    }
-    InputTargetEffect(WheelContext.VOLUME) { input ->
-        when (input) {
-            is BuxesInput.Rotate -> {
-                choose(hsv.turned(channel, input.detents))
-                true
-            }
-            is BuxesInput.Press -> when (input.button) {
-                WheelButton.CENTER -> {
-                    apply()
-                    true
-                }
-                // Skip forward and back choose the bar the Wheel turns.
-                WheelButton.NEXT, WheelButton.PREVIOUS -> {
-                    val all = ColorChannel.entries
-                    val step = if (input.button == WheelButton.NEXT) 1 else all.size - 1
-                    channel = all[(channel.ordinal + step) % all.size]
-                    haptics.step()
-                    true
-                }
-                else -> false
-            }
-            else -> false
-        }
-    }
-
-    Column(
-        Modifier.fillMaxSize().padding(top = insets.top + Spacing.s, bottom = insets.bottom).padding(horizontal = Spacing.xl),
-    ) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(56.dp)
-                .background(Color(argb), ContinuousShape(16.dp))
-                .border(1.dp, colors.separator, ContinuousShape(16.dp))
-                .semantics { contentDescription = "Color preview ${formatHex(argb)}" },
-        )
-        Spacer(Modifier.height(Spacing.l))
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .height(52.dp)
-                .background(colors.canvasRaised, ContinuousShape(14.dp))
-                .border(1.dp, if (invalid) colors.critical else colors.separator, ContinuousShape(14.dp))
-                .padding(horizontal = Spacing.l),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            BuxesText("#", type.title, colors.labelSecondary)
-            Spacer(Modifier.width(Spacing.xs))
-            BuxesTextField(
-                value = text,
-                onValueChange = { raw ->
-                    val cleaned = raw.uppercase().filter { it.isDigit() || it in 'A'..'F' }.take(6)
-                    text = cleaned
-                    val parsed = parseHex(cleaned)
-                    invalid = cleaned.length == 6 && parsed == null
-                    if (parsed != null) {
-                        argb = parsed
-                        hsv = Hsv.of(parsed)
-                    }
-                },
-                textStyle = type.title.copy(color = colors.labelPrimary),
-                description = "Hex color code",
-                action = KeyboardAction.DONE,
-                onAction = { focusManager.clearFocus() },
-                layout = KeyLayout.HEX,
-                maxLength = 6,
-                accept = { it.isDigit() || it.uppercaseChar() in 'A'..'F' },
-                phoneOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.Characters,
-                    autoCorrectEnabled = false,
-                    keyboardType = KeyboardType.Ascii,
-                ),
-                cursorColor = colors.highlightText,
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Spacer(Modifier.height(Spacing.m))
-        // The whole palette, and how much colour and light: the Wheel turns the marked bar.
-        for (c in ColorChannel.entries) {
-            ColorBar(c, hsv, chosen = c == channel, onChoose = { channel = c }, onSet = { fraction -> choose(hsv.with(c, fraction)) })
-            Spacer(Modifier.height(Spacing.s))
-        }
-        BuxesText(
-            if (text.length in 1..5) "Use six hex digits, like 2F6F5E." else "Turn the Wheel to change ${channel.label.lowercase()}. Skip forward or back for the next bar.",
-            type.footnote,
-            colors.labelSecondary,
-            maxLines = 2,
-        )
-        Spacer(Modifier.height(Spacing.m))
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(48.dp)
-                .background(colors.highlight, ContinuousShape(14.dp))
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                    if (parseHex(text) != null) apply() else haptics.reject()
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            BuxesText("Use this color", type.rowFocused, colors.onHighlight)
-        }
-    }
-}
 
 @Composable
 internal fun Swatch(color: Color?) {
