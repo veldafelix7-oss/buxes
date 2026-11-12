@@ -1,26 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Buxes's mark: the "X" of the boot wordmark (Archivo, weight 900, width 125), in frosted white over the blue glass. Generated from the font. -->
+<!-- Buxes's mark: the "X" of the boot wordmark (Archivo 900), as a solid block — a pale glass face on a deep-blue extruded body, lit from the top-left. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- A soft glass tile behind the X. -->
-    <path android:pathData="M30 30h48a8 8 0 0 1 8 8v32a8 8 0 0 1 -8 8h-48a8 8 0 0 1 -8 -8v-32a8 8 0 0 1 8 -8z"
-        android:fillColor="#33FFFFFF" android:strokeColor="#66FFFFFF" android:strokeWidth="1" />
+    <group android:translateX="2.4" android:translateY="7.2">
+        <path android:pathData="M27.63 73 45.74 53.39 29.28 35H46.9L54.36 44H54.8L62.75 35H78.88L62.31 52.84L80.37 73H62.81L53.75 62.28H53.25L43.86 73Z" android:fillColor="#33062A6B" />
+    </group>
+    <group android:translateX="3.85" android:translateY="5.25">
+        <path android:pathData="M27.63 73 45.74 53.39 29.28 35H46.9L54.36 44H54.8L62.75 35H78.88L62.31 52.84L80.37 73H62.81L53.75 62.28H53.25L43.86 73Z" android:fillColor="#0B2F7A" />
+    </group>
+    <group android:translateX="3.30" android:translateY="4.50">
+        <path android:pathData="M27.63 73 45.74 53.39 29.28 35H46.9L54.36 44H54.8L62.75 35H78.88L62.31 52.84L80.37 73H62.81L53.75 62.28H53.25L43.86 73Z" android:fillColor="#0D3585" />
+    </group>
+    <group android:translateX="2.75" android:translateY="3.75">
+        <path android:pathData="M27.63 73 45.74 53.39 29.28 35H46.9L54.36 44H54.8L62.75 35H78.88L62.31 52.84L80.37 73H62.81L53.75 62.28H53.25L43.86 73Z" android:fillColor="#103B90" />
+    </group>
+    <group android:translateX="2.20" android:translateY="3.00">
+        <path android:pathData="M27.63 73 45.74 53.39 29.28 35H46.9L54.36 44H54.8L62.75 35H78.88L62.31 52.84L80.37 73H62.81L53.75 62.28H53.25L43.86 73Z" android:fillColor="#13429B" />
+    </group>
+    <group android:translateX="1.65" android:translateY="2.25">
+        <path android:pathData="M27.63 73 45.74 53.39 29.28 35H46.9L54.36 44H54.8L62.75 35H78.88L62.31 52.84L80.37 73H62.81L53.75 62.28H53.25L43.86 73Z" android:fillColor="#1548A6" />
+    </group>
+    <group android:translateX="1.10" android:translateY="1.50">
+        <path android:pathData="M27.63 73 45.74 53.39 29.28 35H46.9L54.36 44H54.8L62.75 35H78.88L62.31 52.84L80.37 73H62.81L53.75 62.28H53.25L43.86 73Z" android:fillColor="#184FB1" />
+    </group>
+    <group android:translateX="0.55" android:translateY="0.75">
+        <path android:pathData="M27.63 73 45.74 53.39 29.28 35H46.9L54.36 44H54.8L62.75 35H78.88L62.31 52.84L80.37 73H62.81L53.75 62.28H53.25L43.86 73Z" android:fillColor="#1B55BC" />
+    </group>
     <path android:pathData="M27.63 73 45.74 53.39 29.28 35H46.9L54.36 44H54.8L62.75 35H78.88L62.31 52.84L80.37 73H62.81L53.75 62.28H53.25L43.86 73Z">
         <aapt:attr name="android:fillColor">
-            <gradient
-                android:type="linear"
-                android:startX="54"
-                android:startY="35.00"
-                android:endX="54"
-                android:endY="73.00">
+            <gradient android:type="linear" android:startX="40" android:startY="35" android:endX="68" android:endY="73">
                 <item android:offset="0.0" android:color="#FFFFFFFF" />
-                <item android:offset="0.55" android:color="#FFEAFBFF" />
-                <item android:offset="1.0" android:color="#FFC2EEFF" />
+                <item android:offset="0.5" android:color="#FFE6F7FF" />
+                <item android:offset="1.0" android:color="#FFB9E2FF" />
             </gradient>
         </aapt:attr>
     </path>
+    <!-- A thin lit edge along the top-left of the face. -->
+    <path android:pathData="M27.63 73 45.74 53.39 29.28 35H46.9L54.36 44H54.8L62.75 35H78.88L62.31 52.84L80.37 73H62.81L53.75 62.28H53.25L43.86 73Z" android:fillColor="#00000000" android:strokeColor="#80FFFFFF" android:strokeWidth="0.8" />
 </vector>

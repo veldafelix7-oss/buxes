@@ -180,7 +180,8 @@ fun LyricsScreen(controller: PlaybackController, gateway: LyricsGateway, pulse: 
             var lastPosition = -1L
             var lastClock = 0L
             while (isActive && following) {
-                val position = controller.positionMs()
+                // A touch ahead of the music (Buxes): the line is up as the word is sung, not after.
+                val position = controller.positionMs() + LEAD_MS
                 // Diagnostics for lyrics that drift from the music: while playing, the player's
                 // position should move with the clock. Facts only (no titles).
                 val clock = android.os.SystemClock.elapsedRealtime()
@@ -459,7 +460,9 @@ private const val MAX_WAIT_MS = 500L
 private const val DRIFT_LOG_MS = 1_200L
 private const val RESUME_FOLLOW_MS = 5_000L
 private const val DETAILS_MS = 4_000L
-private const val INVERT_MS = 90
+private const val INVERT_MS = 60
+/** How far ahead of the player's clock the lyrics run, to be felt as on time. */
+private const val LEAD_MS = 180L
 
 /**
  * Whether Classic's paper is Carbon's black now (D-100): every other line when it turns with the
@@ -493,5 +496,5 @@ private fun waitText(ms: Long): String {
 private const val RETRY_SLACK_MS = 500L
 
 /** Classic's glass paper (Buxes): the light pane and the deep-blue pane the lines turn between. */
-private val GlassPaperLight = Color(0x40FFFFFF)
-private val GlassPaperDark = Color(0x8C0B3C9C)
+private val GlassPaperLight = Color(0x2EFFFFFF)
+private val GlassPaperDark = Color(0x520B3C9C)

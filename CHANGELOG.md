@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-12
+
+### Added
+- Lyrics: photos of the artist, found on Wikipedia (no key) and checked against the song, turn behind the words line by line; looked up the moment a song starts, kept on the phone. The cover stands in when none are found.
+
+### Changed
+- Lyrics: pictures are much less blurred and the glass panes thinner, so they can be seen; the picture turns in 220 ms; the lyrics run 180 ms ahead of the player so they feel on time.
+- App icon: the glass tile behind the X is gone; the X is a solid 3D block.
+
 ## [1.2.0] - 2026-11-11
 
 ### Changed

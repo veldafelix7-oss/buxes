@@ -34,9 +34,13 @@ object GlassArt {
     }
 
     fun soften(source: Bitmap, cells: Int): Bitmap {
-        val tiny = Bitmap.createScaledBitmap(source, cells, cells, true)
+        // The picture's own proportions kept (a portrait photo stays a portrait).
+        val longer = maxOf(source.width, source.height).coerceAtLeast(1)
+        val w = (cells * source.width / longer).coerceAtLeast(1)
+        val h = (cells * source.height / longer).coerceAtLeast(1)
+        val tiny = Bitmap.createScaledBitmap(source, w, h, true)
         // Back up to a modest size with filtering, so the final draw starts from smooth gradients.
-        return Bitmap.createScaledBitmap(tiny, cells * 8, cells * 8, true)
+        return Bitmap.createScaledBitmap(tiny, w * 8, h * 8, true)
     }
 
     private fun averageLuminance(bitmap: Bitmap): Float {

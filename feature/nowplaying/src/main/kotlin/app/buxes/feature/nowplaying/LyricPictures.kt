@@ -5,83 +5,69 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.buxes.core.designsystem.artwork.GlassArt
 import app.buxes.core.designsystem.artwork.rememberArtworkState
 import app.buxes.core.designsystem.theme.BuxesTheme
 import app.buxes.player.api.PlaybackController
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
- * The pictures behind the lyrics (Buxes): the playing song's cover and the covers of the next songs
- * in the queue — on YouTube Music, songs the catalogue put beside it — each softened to frosted
- * glass once, and turned with the lines: a new line, the next picture, in one crossfade with the
- * words. Nothing is shown before it has loaded, so the display's own cover glass (always beneath)
- * is all that ever shows through — never the bare blue.
+ * The pictures behind the lyrics (Buxes): photos of the artist found on Wikipedia
+ * ([ArtistPictures]), each softened a little once, turned with the lines — a new line, the next
+ * photo, in one quick crossfade with the words. Until the photos are there (or when there are
+ * none: a local song, offline), the song's cover stands in; the display's cover glass is always
+ * beneath, so the bare blue never shows.
  */
 @Composable
 internal fun LyricPictures(controller: PlaybackController, line: Int, modifier: Modifier = Modifier) {
     val snapshot by controller.snapshot.collectAsStateWithLifecycle()
-    val queue by controller.queue.collectAsStateWithLifecycle()
-    val current = snapshot.item?.artworkUri
-    // The current cover first, then the next distinct covers in the queue, at most four in all.
-    val uris = remember(current, queue.entries, queue.currentIndex) {
-        buildList {
-            current?.let { add(it) }
-            val entries = queue.entries
-            if (entries.isNotEmpty()) {
-                val start = (queue.currentIndex + 1).coerceAtLeast(0)
-                for (i in 0 until entries.size) {
-                    val uri = entries[(start + i) % entries.size].artworkUri ?: continue
-                    if (uri !in this) add(uri)
-                    if (size >= MAX_PICTURES) break
-                }
-            }
+    val item = snapshot.item
+    val context = LocalContext.current
+    val artist = item?.artistDisplay
+    val title = item?.title
+    var photos by remember(artist) { mutableStateOf<List<ImageBitmap>>(emptyList()) }
+    LaunchedEffect(artist, title) {
+        if (artist.isNullOrBlank()) return@LaunchedEffect
+        val files = ArtistPictures.pictures(context, artist, title)
+        photos = withContext(Dispatchers.Default) {
+            files.mapNotNull { f -> ArtistPictures.decode(f, DECODE_PX)?.let { GlassArt.soften(it, cells = PHOTO_CELLS).asImageBitmap() } }
         }
     }
-    if (uris.isEmpty()) return
-    // Each picture softened once, kept while the song plays.
-    val soft = uris.map { uri -> softened(uri) }
-    val ready = soft.mapIndexedNotNull { i, b -> b?.let { i to it } }
-    if (ready.isEmpty()) return
-    // The line picks among the pictures that are there; a picture still loading is skipped.
-    val pick = ready[((line.coerceAtLeast(0)) % ready.size)]
+    // The cover, softened the same way, while the photos come (and when there are none).
+    val cover = rememberArtworkState(item?.artworkUri, 160.dp)
+    val coverSoft = remember(cover.bitmap) { cover.bitmap?.let { GlassArt.soften(it.asAndroidBitmap(), cells = PHOTO_CELLS).asImageBitmap() } }
+    val pictures = if (photos.isNotEmpty()) photos else listOfNotNull(coverSoft)
+    if (pictures.isEmpty()) return
+    val pick = (line.coerceAtLeast(0)) % pictures.size
     val reduced = BuxesTheme.motion.reduced
-    Crossfade(targetState = pick.first, animationSpec = tween(if (reduced) 0 else TURN_MS), label = "lyricPicture", modifier = modifier.fillMaxSize()) { which ->
-        val bitmap = soft.getOrNull(which) ?: return@Crossfade
+    Crossfade(targetState = pick to pictures.size, animationSpec = tween(if (reduced) 0 else TURN_MS), label = "lyricPicture", modifier = modifier.fillMaxSize()) { (which, _) ->
+        val bitmap = pictures.getOrNull(which) ?: return@Crossfade
         Image(
             painter = BitmapPainter(bitmap, filterQuality = FilterQuality.Medium),
             contentDescription = null,
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
-            alpha = PICTURE_ALPHA,
         )
     }
 }
 
-@Composable
-private fun softened(uri: String): ImageBitmap? {
-    val state = rememberArtworkState(uri, 96.dp)
-    var soft by remember(uri) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(state.bitmap) {
-        val source = state.bitmap ?: return@LaunchedEffect
-        soft = GlassArt.soften(source.asAndroidBitmap(), cells = 14).asImageBitmap()
-    }
-    return soft
-}
-
-private const val MAX_PICTURES = 4
-private const val TURN_MS = 650
-private const val PICTURE_ALPHA = 0.9f
+/** How much of the photo survives: enough to see a face, soft enough for white words to sit on. */
+private const val PHOTO_CELLS = 56
+private const val DECODE_PX = 320
+private const val TURN_MS = 220
