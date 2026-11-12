@@ -41,29 +41,54 @@ internal fun LyricPictures(controller: PlaybackController, line: Int, modifier: 
     val context = LocalContext.current
     val artist = item?.artistDisplay
     val title = item?.title
+    // The files arrive as the sources answer; each new one is softened once and joins the turn.
+    val files by remember(artist) { ArtistPictures.pictures(context, artist, title) }.collectAsStateWithLifecycle()
     var photos by remember(artist) { mutableStateOf<List<ImageBitmap>>(emptyList()) }
-    LaunchedEffect(artist, title) {
-        if (artist.isNullOrBlank()) return@LaunchedEffect
-        val files = ArtistPictures.pictures(context, artist, title)
-        photos = withContext(Dispatchers.Default) {
-            files.mapNotNull { f -> ArtistPictures.decode(f, DECODE_PX)?.let { GlassArt.soften(it, cells = PHOTO_CELLS).asImageBitmap() } }
+    LaunchedEffect(files) {
+        if (files.size <= photos.size) return@LaunchedEffect
+        val fresh = files.drop(photos.size)
+        val more = withContext(Dispatchers.Default) {
+            fresh.mapNotNull { f -> ArtistPictures.decode(f, DECODE_PX)?.let { GlassArt.soften(it, cells = PHOTO_CELLS).asImageBitmap() } }
         }
+        photos = photos + more
     }
     // The cover, softened the same way, while the photos come (and when there are none).
     val cover = rememberArtworkState(item?.artworkUri, 160.dp)
     val coverSoft = remember(cover.bitmap) { cover.bitmap?.let { GlassArt.soften(it.asAndroidBitmap(), cells = PHOTO_CELLS).asImageBitmap() } }
     val pictures = if (photos.isNotEmpty()) photos else listOfNotNull(coverSoft)
     if (pictures.isEmpty()) return
-    val pick = (line.coerceAtLeast(0)) % pictures.size
+    // The order: a shuffled round through all the pictures, reshuffled when the round is done, and
+    // never the same picture twice in a row — so 1-2-3-4 is followed by 3-1-4-2, not 1-2-3-4 again.
+    val order = remember(artist) { PictureOrder() }
+    val pick = order.at(line.coerceAtLeast(0), pictures.size)
     val reduced = BuxesTheme.motion.reduced
-    Crossfade(targetState = pick to pictures.size, animationSpec = tween(if (reduced) 0 else TURN_MS), label = "lyricPicture", modifier = modifier.fillMaxSize()) { (which, _) ->
-        val bitmap = pictures.getOrNull(which) ?: return@Crossfade
+    Crossfade(targetState = pick, animationSpec = tween(if (reduced) 0 else TURN_MS), label = "lyricPicture", modifier = modifier.fillMaxSize()) { which ->
+        val bitmap = pictures.getOrNull(which) ?: pictures.last()
         Image(
             painter = BitmapPainter(bitmap, filterQuality = FilterQuality.Medium),
             contentDescription = null,
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
         )
+    }
+}
+
+/** Remembers which picture each line showed, dealing a fresh shuffled round as lines go on. */
+private class PictureOrder {
+    private val dealt = ArrayList<Int>()
+    private val random = java.util.Random()
+
+    fun at(line: Int, count: Int): Int {
+        if (count <= 1) return 0
+        while (dealt.size <= line) {
+            val round = (0 until count).shuffled(random).toMutableList()
+            // Not the same picture as the last of the previous round.
+            val last = dealt.lastOrNull()
+            if (last != null && round.first() == last) java.util.Collections.swap(round, 0, round.size - 1)
+            dealt += round
+        }
+        // More pictures arrived since: lines already dealt keep their picture if it still exists.
+        return dealt[line].coerceAtMost(count - 1)
     }
 }
 

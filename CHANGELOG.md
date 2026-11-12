@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-12
+
+### Added
+- Lyrics: artist pictures now come from Deezer (photo + album covers, checked against the song), Wikimedia Commons, Wikipedia and iTunes, all at once, up to ten a song; the first shows within a moment and the rest join as they arrive.
+- Lyrics: word pop-in with a soft spring, the sung word glows, sung words step back; the line lifts away as the next rises in.
+- The picture store tidies itself: artists no longer in the queue are dropped after the music moves on, nothing stays past a week, and the whole store stays under 30 MB / 40 artists.
+
+### Changed
+- Lyrics: pictures turn in a shuffled order each round, never the same one twice in a row.
+
 ## [1.3.0] - 2026-11-12
 
 ### Added
