@@ -424,6 +424,14 @@ fun BuxesApp(graph: AppGraph, onSourceAction: (CapabilityAction) -> Unit, onTurn
     // to frosted glass — is the display's background on every screen; the blue room when nothing plays.
     val playingItem by graph.playbackController.snapshot.collectAsStateWithLifecycle()
     var coverGlass by remember { mutableStateOf<app.buxes.core.designsystem.theme.DisplayImage?>(null) }
+    // Buxes: the moment a song starts (tapped in a search, or next in the queue), its artist's
+    // photos are looked up and kept, so the Lyrics screen finds them ready.
+    val appContext = LocalContext.current.applicationContext
+    LaunchedEffect(playingItem.item?.trackId) {
+        val item = playingItem.item ?: return@LaunchedEffect
+        if (item.kind == app.buxes.core.model.MediaKind.LIVE) return@LaunchedEffect
+        app.buxes.feature.nowplaying.ArtistPictures.prefetch(appContext, item.artistDisplay, item.title)
+    }
     CompositionLocalProvider(LocalArtworkLoader provides graph.artworkLoader) {
         val state = rememberArtworkState(playingItem.item?.artworkUri, 96.dp)
         // While the next cover loads the last one holds, so a skip never dips through the blue.
