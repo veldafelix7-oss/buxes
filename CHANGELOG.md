@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-11-20
+
+### Changed
+- The Island is a fixed small capsule: a long title or artist scrolls inside it instead of widening it.
+- The Island knows where the front camera is: in the middle it opens out from both sides of the camera (the camera sits in its gap); in a corner it slides in from the other side; without one it drops down from the top. It sits level with the camera, never under it.
+- The moving bars are replaced by the play/pause mark that breathes with the music, and a small heart that beats beside it.
+
+### Removed
+- The Island inside the app (only the one over other apps remains).
+- Automatic low-battery mode.
+
 ## [1.6.0] - 2026-11-13
 
 ### Added

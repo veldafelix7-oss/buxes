@@ -920,27 +920,6 @@ private fun ScreenOs(
                     battery = if (immersive && titleBarBattery) battery else null,
                     modifier = Modifier.align(Alignment.TopCenter).then(behindOverlay),
                 )
-                // The Island (Buxes): under the title bar on the screens that show the mini player.
-                val islandOn by graph.deviceSettings.island.collectAsStateWithLifecycle()
-                AnimatedVisibility(
-                    visible = islandOn && miniPlayerVisible && top != Dest.NowPlaying,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(top = Spacing.titleBar + Spacing.xs).then(behindOverlay),
-                    enter = fadeIn(motion.fadeStandard()) + slideInVertically(motion.navigateOffset()) { -it },
-                    exit = fadeOut(motion.fadeFast()) + slideOutVertically(motion.navigateOffset()) { -it },
-                ) {
-                    val item = snapshot.item
-                    if (item != null) {
-                        app.buxes.core.designsystem.component.Island(
-                            title = item.title,
-                            subtitle = item.artistDisplay,
-                            artworkUri = item.artworkUri,
-                            isPlaying = snapshot.intent == PlayIntent.PLAY,
-                            onOpen = navigator::showNowPlaying,
-                            onNext = controller::next,
-                            onPrevious = controller::previous,
-                        )
-                    }
-                }
                 AnimatedVisibility(
                     visible = miniPlayerVisible,
                     modifier = Modifier.align(Alignment.BottomCenter).then(behindOverlay),
