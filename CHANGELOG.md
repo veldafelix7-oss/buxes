@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-11-20
+
+### Changed
+- The Island is back to a small fixed capsule in the middle of the top, dark glass, opening out from its middle; it appears a moment after Buxes leaves the display, so its entrance is seen.
+- Now Playing's live orb dances in the Island, to the music, in place of the play mark and the heart.
+- One line that keeps running: title, artist, round again — no blinking.
+- The camera-matching placement and animations are gone (they went wrong on some phones); the capsule only stays level with the camera's row.
+
 ## [1.6.1] - 2026-11-20
 
 ### Changed
