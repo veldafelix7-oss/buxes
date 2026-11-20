@@ -66,10 +66,11 @@ private sealed interface SearchRow {
 fun OnlineSearchScreen(repository: OnlineRepository, actions: OnlineActions, navigate: (OnlinePlace) -> Unit) {
     val likedIds by repository.likedIds.collectAsStateWithLifecycle()
     val overlayHost = overlay()
-    var query by rememberSaveable { mutableStateOf("") }
-    var results by remember { mutableStateOf<Remote<app.buxes.sources.api.SearchResults>?>(null) }
-    var songs by remember { mutableStateOf<List<Track>>(emptyList()) }
-    var moreExhausted by remember { mutableStateOf(false) }
+    // Buxes: the last search is kept for the session — coming back shows it at once, no loading.
+    var query by rememberSaveable { mutableStateOf(SearchMemory.query) }
+    var results by remember { mutableStateOf<Remote<app.buxes.sources.api.SearchResults>?>(SearchMemory.resultsFor(query)) }
+    var songs by remember { mutableStateOf<List<Track>>(SearchMemory.songsFor(query)) }
+    var moreExhausted by remember { mutableStateOf(SearchMemory.exhaustedFor(query)) }
     // The songs show a few at first, so albums, artists and playlists are a short turn away.
     var songsExpanded by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -84,6 +85,13 @@ fun OnlineSearchScreen(repository: OnlineRepository, actions: OnlineActions, nav
                 songs = emptyList()
                 return@collectLatest
             }
+            // The same words as last time: the answer is still here.
+            if (text == SearchMemory.query && SearchMemory.results != null) {
+                results = SearchMemory.results
+                songs = SearchMemory.songs
+                moreExhausted = SearchMemory.exhausted
+                return@collectLatest
+            }
             delay(DEBOUNCE_MS)
             results = Remote.Loading
             // Every online source answers in its own time; what's known so far shows straight away.
@@ -93,6 +101,7 @@ fun OnlineSearchScreen(repository: OnlineRepository, actions: OnlineActions, nav
                     is Outcome.Success -> Remote.Ready(r.value).also {
                         songs = r.value.tracks
                         moreExhausted = r.value.tracks.size < RESULTS
+                        SearchMemory.remember(text, it, songs, moreExhausted)
                     }
                     is Outcome.Failure -> Remote.Failed(r.error)
                 }
@@ -159,6 +168,7 @@ fun OnlineSearchScreen(repository: OnlineRepository, actions: OnlineActions, nav
                 }
                 is Outcome.Failure -> moreExhausted = true
             }
+            results?.let { if (query.trim() == SearchMemory.query) SearchMemory.remember(SearchMemory.query, it, songs, moreExhausted) }
         }
     }
     val focus = rememberFocusListState("online-search")
@@ -262,3 +272,18 @@ private const val RESULTS = 20
 
 /** Songs shown before "More songs": enough to pick from, few enough that albums are near. */
 private const val SONGS_PREVIEW = 5
+
+/** The session's last search and its answer (Buxes): shown again at once when the screen returns. */
+private object SearchMemory {
+    var query: String = ""
+    var results: Remote<app.buxes.sources.api.SearchResults>? = null
+    var songs: List<Track> = emptyList()
+    var exhausted: Boolean = false
+
+    fun remember(q: String, r: Remote<app.buxes.sources.api.SearchResults>, s: List<Track>, done: Boolean) {
+        query = q; results = r; songs = s; exhausted = done
+    }
+    fun resultsFor(q: String) = if (q.trim() == query && query.isNotEmpty()) results else null
+    fun songsFor(q: String) = if (q.trim() == query && query.isNotEmpty()) songs else emptyList()
+    fun exhaustedFor(q: String) = if (q.trim() == query && query.isNotEmpty()) exhausted else false
+}
