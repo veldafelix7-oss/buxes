@@ -421,16 +421,26 @@ private fun Lyric(
     val moodOf = remember(words, moods) { words.indices.associate { words[it] to moods[it] } }
     // The word as it is set: a hot word shouts in capitals.
     fun shownText(word: String) = if (moodOf[word] == WordMood.HOT) word.uppercase() else word
+    // The face of each word: several per mood, dealt by the word and its place, steady for the line.
+    val seed = remember(text) { text.hashCode() }
+    fun faceOf(word: String, faces: List<androidx.compose.ui.text.font.FontFamily>) = faces[((word.hashCode() xor seed) ushr 1) % faces.size]
     fun styleFor(word: String, px: Float): TextStyle {
         val mood = moodOf[word] ?: WordMood.PLAIN
         val size = px * mood.scale
         return when (mood) {
-            WordMood.HOT -> style.copy(fontFamily = MoodFaces.Heavy, fontWeight = FontWeight.Black, fontSize = with(density) { size.toSp() }, letterSpacing = 0.02.em)
-            WordMood.ENERGY -> style.copy(fontFamily = MoodFaces.Slanted, fontWeight = FontWeight.Bold, fontSize = with(density) { size.toSp() })
-            WordMood.CALM -> style.copy(fontFamily = MoodFaces.Soft, fontWeight = FontWeight.Normal, fontSize = with(density) { size.toSp() }, letterSpacing = 0.03.em)
+            WordMood.HOT -> style.copy(fontFamily = faceOf(word, MoodFaces.Heavy), fontWeight = FontWeight.Black, fontSize = with(density) { size.toSp() }, letterSpacing = 0.02.em)
+            WordMood.ENERGY -> style.copy(fontFamily = faceOf(word, MoodFaces.Slanted), fontWeight = FontWeight.Bold, fontSize = with(density) { size.toSp() })
+            WordMood.CALM -> style.copy(fontFamily = faceOf(word, MoodFaces.Soft), fontWeight = FontWeight.SemiBold, fontSize = with(density) { size.toSp() }, letterSpacing = 0.03.em)
             WordMood.PLAIN -> style.copy(fontSize = with(density) { size.toSp() })
         }
     }
+    // Hot words are cut from paper (Buxes): built once per size, measured by their scraps.
+    val papers = remember(text, moods) { HashMap<String, PaperWord>() }
+    fun paperFor(word: String, px: Float): PaperWord = papers.getOrPut("$word@${px.toInt()}") {
+        PaperWord.build(shownText(word), px * WordMood.HOT.scale, style.copy(fontSize = with(density) { (px * WordMood.HOT.scale * 0.8f).toSp() }), measurer, seed)
+    }
+    fun widthOf(word: String, px: Float): Float =
+        if (moodOf[word] == WordMood.HOT) paperFor(word, px).width else measurer.measure(shownText(word), styleFor(word, px)).size.width.toFloat()
     BoxWithConstraints(
         Modifier
             .fillMaxSize()
@@ -454,9 +464,7 @@ private fun Lyric(
         val minFont = with(density) { 20.sp.toPx() }
         // Each word measured in its own face and size, so hot words have the room they take.
         val layout = remember(text, widthPx, heightPx, style, moods) {
-            LyricLayout.layout(text, widthPx, heightPx, maxFont, minFont) { word, px ->
-                measurer.measure(shownText(word), styleFor(word, px)).size.width.toFloat()
-            }
+            LyricLayout.layout(text, widthPx, heightPx, maxFont, minFont) { word, px -> widthOf(word, px) }
         }
         val originX = with(density) { marginX.toPx() }
         val originY = with(density) { marginY.toPx() }
@@ -500,6 +508,7 @@ private fun Lyric(
                     val raw = alphas[i].value
                     val rest = rests[i].value
                     val textLayout = measured[i]
+                    val paper = if (wordMoods[i] == WordMood.HOT) paperFor(word.text, layout.fontPx) else null
                     val mood = wordMoods[i]
                     val current = i == shown - 1
                     i++
@@ -535,7 +544,9 @@ private fun Lyric(
                     // The word being sung breathes with the bass; sung words step back a little.
                     val live = if (current) 1f + 0.08f * swell().coerceIn(0f, 1f) else 1f
                     val topLeft = Offset(originX + word.x + dx, originY + line.y + dy)
-                    val pivot = Offset(topLeft.x + textLayout.size.width / 2f, topLeft.y + textLayout.size.height / 2f)
+                    val drawnW = paper?.width ?: textLayout.size.width.toFloat()
+                    val drawnH = paper?.height ?: textLayout.size.height.toFloat()
+                    val pivot = Offset(topLeft.x + drawnW / 2f, topLeft.y + drawnH / 2f)
                     val shade = a * (1f - 0.2f * rest)
                     val glow = when {
                         reduced -> null
@@ -546,7 +557,7 @@ private fun Lyric(
                         else -> null
                     }
                     scale(scale * live, scale * live, pivot) {
-                        drawText(textLayout, topLeft = topLeft, alpha = shade, shadow = glow)
+                        if (paper != null) paper.draw(this, topLeft, shade) else drawText(textLayout, topLeft = topLeft, alpha = shade, shadow = glow)
                     }
                 }
                 if (waiting) drawText(dots, topLeft = Offset((size.width - dots.size.width) / 2f, (size.height - dots.size.height) / 2f))

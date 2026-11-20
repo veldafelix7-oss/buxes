@@ -75,6 +75,21 @@ interface DeviceSettingsRepository {
 
     fun setTitleBarBattery(shown: Boolean) {}
 
+    /** The Island (Buxes): a small capsule at the top with the cover, the title and the beat, in the app. */
+    val island: StateFlow<Boolean> get() = On
+
+    fun setIsland(enabled: Boolean) {}
+
+    /** The Island over other apps too, when Android lets Buxes draw over them. */
+    val islandOverlay: StateFlow<Boolean> get() = On
+
+    fun setIslandOverlay(enabled: Boolean) {}
+
+    /** Whether the one-time ask for the overlay permission has been shown. */
+    val islandAsked: StateFlow<Boolean> get() = Off
+
+    fun setIslandAsked() {}
+
     /**
      * Now Playing's action tray slides away when nothing has been touched for a while (D-108), leaving
      * the cover and the orb. The Wheel's next move only brings it back; nothing else happens until it

@@ -131,6 +131,9 @@ import app.buxes.core.designsystem.tonal.rememberCoverAnalysis
 import app.buxes.core.designsystem.theme.LocalDisplaySurface
 import app.buxes.core.designsystem.theme.BuxesMotion
 import app.buxes.core.designsystem.theme.BuxesTheme
+import app.buxes.core.designsystem.component.GlassNotice
+import app.buxes.core.designsystem.component.NoticeSpec
+import app.buxes.core.designsystem.component.MenuAction
 import app.buxes.core.designsystem.theme.Spacing
 import app.buxes.core.interaction.Clicker
 import app.buxes.core.interaction.DoublePress
@@ -917,6 +920,27 @@ private fun ScreenOs(
                     battery = if (immersive && titleBarBattery) battery else null,
                     modifier = Modifier.align(Alignment.TopCenter).then(behindOverlay),
                 )
+                // The Island (Buxes): under the title bar on the screens that show the mini player.
+                val islandOn by graph.deviceSettings.island.collectAsStateWithLifecycle()
+                AnimatedVisibility(
+                    visible = islandOn && miniPlayerVisible && top != Dest.NowPlaying,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = Spacing.titleBar + Spacing.xs).then(behindOverlay),
+                    enter = fadeIn(motion.fadeStandard()) + slideInVertically(motion.navigateOffset()) { -it },
+                    exit = fadeOut(motion.fadeFast()) + slideOutVertically(motion.navigateOffset()) { -it },
+                ) {
+                    val item = snapshot.item
+                    if (item != null) {
+                        app.buxes.core.designsystem.component.Island(
+                            title = item.title,
+                            subtitle = item.artistDisplay,
+                            artworkUri = item.artworkUri,
+                            isPlaying = snapshot.intent == PlayIntent.PLAY,
+                            onOpen = navigator::showNowPlaying,
+                            onNext = controller::next,
+                            onPrevious = controller::previous,
+                        )
+                    }
+                }
                 AnimatedVisibility(
                     visible = miniPlayerVisible,
                     modifier = Modifier.align(Alignment.BottomCenter).then(behindOverlay),
@@ -957,6 +981,31 @@ private fun ScreenOs(
                 }
                 // Buxes's update notice (D-99), above menus.
                 app.buxes.update.UpdatePrompt(graph.updates, PaddingValues(top = ScreenHeaderHeight))
+                // The Island's one ask (Buxes): the first time after the update, straight to Android's
+                // page that lets Buxes draw over other apps. Android can't grant it by itself.
+                val islandAsked by graph.deviceSettings.islandAsked.collectAsStateWithLifecycle()
+                val activity = LocalContext.current as? Activity
+                if (!islandAsked && activity != null && !app.buxes.island.IslandOverlay.canDraw(activity)) {
+                    GlassNotice(
+                        spec = NoticeSpec(
+                            title = "Island di luar aplikasi",
+                            lines = listOf(
+                                "Buxes bisa menampilkan kapsul lagu kecil di atas aplikasi lain selama musik jalan.",
+                                "Android minta izin \"Tampilkan di atas aplikasi lain\" dinyalakan sendiri. Tekan Izinkan, nyalakan Buxes, lalu kembali.",
+                            ),
+                            actions = listOf(
+                                MenuAction("Izinkan") {
+                                    graph.deviceSettings.setIslandAsked()
+                                    app.buxes.island.IslandOverlay.askPermission(activity)
+                                },
+                                MenuAction("Nanti") { graph.deviceSettings.setIslandAsked() },
+                            ),
+                            dismissible = false,
+                        ),
+                        onDismiss = { graph.deviceSettings.setIslandAsked() },
+                        panelPadding = PaddingValues(top = ScreenHeaderHeight),
+                    )
+                }
             },
         )
     }

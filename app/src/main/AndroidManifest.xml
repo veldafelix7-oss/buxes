@@ -5,6 +5,8 @@
          platform's cleartext switch agree since the user-server sources were retired). -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- The Island over other apps (Buxes); the user grants it on Android's own page. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- Buxes's own updates (D-99): the app tells of a new release and opens its page; installing is
          left to the browser. REQUEST_INSTALL_PACKAGES is deliberately not asked for: Play Protect in
