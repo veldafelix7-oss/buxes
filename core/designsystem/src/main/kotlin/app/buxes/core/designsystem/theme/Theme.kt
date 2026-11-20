@@ -188,7 +188,8 @@ fun BuxesTheme(
     displayImage: DisplayImage? = null,
     content: @Composable () -> Unit,
 ) {
-    val reducedMotion = rememberReducedMotion()
+    // Buxes: a low battery or Battery Saver also quiets the motion (lyrics, pictures), by itself.
+    val reducedMotion = rememberReducedMotion() || rememberLowPower()
     val colors = remember(displayTheme, darkTheme, display, displayImage) { DisplayColors.colors(displayTheme, darkTheme, display, displayImage) }
     val surface = remember(displayTheme, display, displayImage) { DisplayColors.surface(displayTheme, display, displayImage) }
     val preset = TypographyPreset.of(display.font)
@@ -228,3 +229,41 @@ private fun rememberReducedMotion(): Boolean {
 
 private fun animationsRemoved(resolver: ContentResolver): Boolean =
     Settings.Global.getFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+
+/**
+ * Low power (Buxes): the phone's Battery Saver is on, or the battery is under [LOW_BATTERY_PERCENT]
+ * and not charging. Followed live from the system's broadcasts.
+ */
+@Composable
+private fun rememberLowPower(): Boolean {
+    val context = LocalContext.current
+    var low by remember { mutableStateOf(lowPower(context)) }
+    DisposableEffect(context) {
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: android.content.Context, intent: android.content.Intent) {
+                low = lowPower(context)
+            }
+        }
+        val filter = android.content.IntentFilter().apply {
+            addAction(android.os.PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+            addAction(android.content.Intent.ACTION_BATTERY_LOW)
+            addAction(android.content.Intent.ACTION_BATTERY_OKAY)
+            addAction(android.content.Intent.ACTION_POWER_CONNECTED)
+            addAction(android.content.Intent.ACTION_POWER_DISCONNECTED)
+        }
+        // All system (protected) broadcasts: no export flag needed.
+        context.registerReceiver(receiver, filter)
+        onDispose { runCatching { context.unregisterReceiver(receiver) } }
+    }
+    return low
+}
+
+private fun lowPower(context: android.content.Context): Boolean {
+    val power = context.getSystemService(android.os.PowerManager::class.java)
+    if (power?.isPowerSaveMode == true) return true
+    val battery = context.getSystemService(android.os.BatteryManager::class.java) ?: return false
+    val percent = battery.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+    return percent in 1..LOW_BATTERY_PERCENT && !battery.isCharging
+}
+
+private const val LOW_BATTERY_PERCENT = 15

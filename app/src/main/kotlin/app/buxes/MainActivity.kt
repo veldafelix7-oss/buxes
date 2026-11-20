@@ -56,6 +56,7 @@ class MainActivity : ComponentActivity() {
         graph.startListening()
         handleDebugIntent(intent, graph)
         applyDebugWindowCommand(intent, this)
+        openFrom(intent)
         setContent {
             BuxesApp(graph, onSourceAction = ::perform, onTurnOff = ::turnOff)
         }
@@ -99,6 +100,15 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         handleDebugIntent(intent, graph)
         applyDebugWindowCommand(intent, this)
+        openFrom(intent)
+    }
+
+    /** The Island's tap (Buxes) opens Now Playing. */
+    private fun openFrom(intent: Intent?) {
+        intent?.getStringExtra(EXTRA_OPEN)?.let { place ->
+            graph.debugOpen.value = place
+            intent.removeExtra(EXTRA_OPEN)
+        }
     }
 
     override fun onResume() {
@@ -162,7 +172,10 @@ class MainActivity : ComponentActivity() {
         }, TURN_OFF_GRACE_MS)
     }
 
-    private companion object {
+    companion object {
+        /** A screen to open ("now-playing"), from the Island over other apps. */
+        const val EXTRA_OPEN = "app.buxes.open"
+
         /** Long enough for the service's own goodbye (it saves the position, briefly). */
         const val TURN_OFF_GRACE_MS = 1_200L
 

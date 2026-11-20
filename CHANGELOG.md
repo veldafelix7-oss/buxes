@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-11-13
+
+### Added
+- The Island: a small capsule under the title bar with the cover, the title and bars that move with the music; tap opens Now Playing, swipe skips. On by default (Settings ▸ Island).
+- The Island over other apps, when Android's "draw over other apps" permission is given (asked once after the update; Settings ▸ Island over other apps).
+- Cut-paper lettering for hot words in the Lyrics: each letter on its own coloured scrap, in its own face, slightly askew.
+- More bold faces for coloured words, dealt per word: Anton, Bebas Neue, Black Ops One, Rubik Mono One, Bungee, Oswald (hot); Lilita One, Titan One, Luckiest Guy (energy); Fredoka, Baloo 2, Comfortaa, Quicksand (calm).
+- A 200 MB cache for streamed audio, so a song heard again plays from the phone.
+- Plugging headphones or a Bluetooth speaker back in resumes the song that unplugging paused.
+- Lyrics are fetched together with the artist's photos the moment a song starts.
+- Low-battery mode: under 15 %, or with the battery saver on, the heavier motion is turned down.
+- The last online search is kept while the app runs.
+
+### Changed
+- The calm face is clearly rounder than the normal font.
+
 ## [1.5.0] - 2026-11-12
 
 ### Added

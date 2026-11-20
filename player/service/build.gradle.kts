@@ -8,6 +8,8 @@ dependencies {
     api(project(":player:api"))
     api(project(":sources:api"))
     implementation(libs.media3.exoplayer)
+    implementation(libs.media3.datasource)
+    implementation(libs.media3.database)
     // Live radio's streams are live HLS (D-90); DefaultMediaSourceFactory finds it on the classpath.
     implementation(libs.media3.exoplayer.hls)
     // Custom sources (D-91) may hand over a DASH manifest (one lossless representation, say).

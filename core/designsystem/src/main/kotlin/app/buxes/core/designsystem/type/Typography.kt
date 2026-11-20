@@ -415,11 +415,25 @@ fun BuxesText(
 }
 
 /**
- * The faces the lyrics use for a word's mood (Buxes): a heavy block for a shouted or hot word, a
- * slanted bold for an energetic one, a round soft face for a calm one. Never a script.
+ * The faces the lyrics use for a word's mood (Buxes), several of each, so a line of hot words isn't
+ * set all in one block: heavy blocks for a shouted or hot word, slanted and chunky bolds for an
+ * energetic one, round soft bolds for a calm one. Never a script. [paper] are the faces the
+ * cut-paper letters are clipped from — a serif, a typewriter, a sans, a condensed block.
  */
 object MoodFaces {
-    val Heavy: FontFamily get() = ArchivoBlack
-    val Slanted: FontFamily get() = InstrumentSansItalic
-    val Soft: FontFamily get() = Nunito
+    private fun one(res: Int, weight: Int = 400) = FontFamily(static(res, weight))
+    private fun varying(res: Int, weights: IntProgression = 400..800 step 100) = FontFamily(weights.map { variable(res, it) })
+
+    val Heavy: List<FontFamily> by lazy {
+        listOf(ArchivoBlack, one(R.font.anton, 700), one(R.font.bebas_neue, 700), one(R.font.black_ops_one, 900), one(R.font.rubik_mono_one, 900), one(R.font.bungee, 800), varying(R.font.oswald, 500..700 step 100))
+    }
+    val Slanted: List<FontFamily> by lazy {
+        listOf(InstrumentSansItalic, one(R.font.lilita_one, 700), one(R.font.titan_one, 800), one(R.font.luckiest_guy, 800), one(R.font.bungee, 800))
+    }
+    val Soft: List<FontFamily> by lazy {
+        listOf(varying(R.font.fredoka, 500..700 step 100), varying(R.font.baloo_2, 500..800 step 100), varying(R.font.comfortaa, 500..700 step 100), varying(R.font.quicksand, 500..700 step 100))
+    }
+    val Paper: List<FontFamily> by lazy {
+        listOf(Playfair, Tinos, one(R.font.special_elite), one(R.font.anton, 700), varying(R.font.oswald, 500..700 step 100), CourierPrime, one(R.font.bebas_neue, 700), InstrumentSans)
+    }
 }

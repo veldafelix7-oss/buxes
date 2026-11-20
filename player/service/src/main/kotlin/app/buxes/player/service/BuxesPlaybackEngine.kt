@@ -131,7 +131,7 @@ class BuxesPlaybackEngine(
         private set
 
     private val mediaSourceFactory: MediaSource.Factory =
-        DefaultMediaSourceFactory(ResolvingDataSource.Factory(DefaultDataSource.Factory(context), QueueDataSpecResolver()))
+        DefaultMediaSourceFactory(ResolvingDataSource.Factory(AudioCache.wrap(context, DefaultDataSource.Factory(context)), QueueDataSpecResolver()))
 
     /** Settings ▸ Equaliser (D-76), in each player's own audio path. */
     private val equalizer = EqualizerProcessor()
@@ -143,6 +143,7 @@ class BuxesPlaybackEngine(
     private var helperMeter: AudioMeter? = null
 
     val player: ExoPlayer = playerFactory?.invoke(context, mediaSourceFactory) ?: buildPlayer(context)
+    private var headsetResume: HeadsetResume? = null
 
     private fun buildPlayer(context: Context): ExoPlayer {
         return ExoPlayer.Builder(context, EffectsRenderersFactory(context, equalizer, sound, deps.audioMeter))
@@ -278,6 +279,7 @@ class BuxesPlaybackEngine(
         })
         restoreSavedQueue()
         saveQueueChanges()
+        headsetResume = HeadsetResume(context, player)
         keepOnlineMusicGoing()
         forgetStreamsOfSourcesThatStop()
         followEffects()
@@ -800,7 +802,13 @@ class BuxesPlaybackEngine(
             if (!NetworkPolicy.permits(target.media.uri)) {
                 throw BuxesResolveException(HealthOutcome.INVALID_MEDIA, "Refused an unencrypted stream off the listener's network")
             }
-            return dataSpec.withUri(Uri.parse(target.media.uri)).withAdditionalHeaders(target.media.headers)
+            // Local files and live stations are never cached; a stream is, under its stable key
+            // (the same song at the same tier, whatever its URL today), so a replay starts at once.
+            val live = target.media.mimeType?.contains("mpegurl", ignoreCase = true) == true || target.media.uri.contains(".m3u8")
+            val cacheable = target.media.uri.startsWith("http") && !live
+            val resolved = dataSpec.withUri(Uri.parse(target.media.uri)).withAdditionalHeaders(target.media.headers)
+            return if (cacheable) resolved.buildUpon().setKey(target.media.cacheKey).build()
+            else resolved.buildUpon().setKey(AudioCache.NO_CACHE_KEY).build()
         }
     }
 
@@ -928,6 +936,7 @@ class BuxesPlaybackEngine(
             if (index >= 0) runBlocking { withTimeoutOrNull(500) { runCatching { store.savePosition(index, player.currentPosition) } } }
         }
         scope.cancel()
+        headsetResume?.release()
         crossfader.release()
         player.release()
     }
