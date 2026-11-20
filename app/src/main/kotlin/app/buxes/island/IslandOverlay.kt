@@ -235,11 +235,11 @@ private class IslandView(
                 holeRight = rect.right - x + 5 * density
             }
             Camera.LEFT, Camera.RIGHT -> {
-                x = (screenW - w) / 2
+                x = (screenW - widthPx) / 2
                 y = (rect!!.centerY() - h / 2f).toInt().coerceAtLeast(0)
             }
             Camera.NONE -> {
-                x = (screenW - w) / 2
+                x = (screenW - widthPx) / 2
                 val status = if (Build.VERSION.SDK_INT >= 30) rootWindowInsets?.getInsets(android.view.WindowInsets.Type.statusBars())?.top ?: 0 else 0
                 y = status + (4 * density).toInt()
             }
