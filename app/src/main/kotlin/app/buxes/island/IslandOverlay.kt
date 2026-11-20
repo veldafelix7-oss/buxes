@@ -261,7 +261,7 @@ private class IslandView(
         if (!placed) return
         // Whatever goes wrong in the Island must never take the music with it: it goes quiet instead.
         try {
-            draw(canvas)
+            paint(canvas)
         } catch (e: Exception) {
             placed = false
             clock.cancel()
@@ -269,7 +269,7 @@ private class IslandView(
         }
     }
 
-    private fun draw(canvas: Canvas) {
+    private fun paint(canvas: Canvas) {
         val now = System.currentTimeMillis()
         // The orb's mind moves on by the time since the last frame (as Now Playing's does).
         val dt = if (lastFrame < 0L) 0f else (now - lastFrame).toFloat().coerceAtMost(100f)
