@@ -42,7 +42,7 @@ import kotlin.math.sin
 /**
  * The Island outside the app (Buxes): the same capsule, drawn over other apps while music plays and
  * Buxes itself is off the display. It needs Android's "draw over other apps" permission, which only
- * the user can give ([askPermission] opens the page); without it there is only the in-app Island.
+ * the user can give ([askPermission] opens the page); without it there is no Island.
  * The view is a plain Android view, owned by the application, so it costs nothing of Compose.
  */
 class IslandOverlay(private val app: Application, private val graph: AppGraph) {
@@ -50,6 +50,8 @@ class IslandOverlay(private val app: Application, private val graph: AppGraph) {
     private class Shown(val title: String, val subtitle: String, val artworkUri: String?, val playing: Boolean)
 
     private val foreground = MutableStateFlow(false)
+    /** Whether anything has played since the app's task began: a restored, paused queue shows nothing. */
+    private val played = MutableStateFlow(false)
     private var started = 0
     private var view: IslandView? = null
 
@@ -64,9 +66,16 @@ class IslandOverlay(private val app: Application, private val graph: AppGraph) {
             override fun onActivityDestroyed(activity: Activity) {}
         })
         graph.appScope.launch {
-            combine(graph.playbackController.snapshot, foreground, graph.deviceSettings.islandOverlay) { s, fg, on ->
+            graph.playbackController.snapshot.collect { if (it.intent == PlayIntent.PLAY && it.item != null) played.value = true }
+        }
+        graph.appScope.launch {
+            // Swiped away from Recents: the Island goes with it, until the next play.
+            graph.taskRemoved.collect { played.value = false; hide() }
+        }
+        graph.appScope.launch {
+            combine(graph.playbackController.snapshot, foreground, graph.deviceSettings.islandOverlay, played) { s, fg, on, p ->
                 val item = s.item
-                if (on && !fg && item != null) Shown(item.title, item.artistDisplay, item.artworkUri, s.intent == PlayIntent.PLAY) else null
+                if (on && !fg && p && item != null) Shown(item.title, item.artistDisplay, item.artworkUri, s.intent == PlayIntent.PLAY) else null
             }.distinctUntilChanged { a, b -> a?.title == b?.title && a?.subtitle == b?.subtitle && a?.artworkUri == b?.artworkUri && a?.playing == b?.playing }
                 .collect { shown ->
                     if (shown == null || !canDraw(app)) hide() else show().bind(shown.title, shown.subtitle, shown.artworkUri, shown.playing)
@@ -94,6 +103,11 @@ class IslandOverlay(private val app: Application, private val graph: AppGraph) {
             x = 0
             y = (8 * density).toInt()
             if (Build.VERSION.SDK_INT >= 28) layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            // Glass (Buxes): what's behind shows through, blurred where the phone can.
+            if (Build.VERSION.SDK_INT >= 31) {
+                flags = flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+                blurBehindRadius = (18 * density).toInt()
+            }
         }
         val v = IslandView(app, graph, density) { x, y ->
             // The capsule sits where the camera is (or just under the status bar); moved once it knows.
@@ -146,8 +160,7 @@ private class IslandView(
     private val place: (x: Int, y: Int) -> Unit,
 ) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 12.5f * density; typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD) }
-    private val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(200, 255, 255, 255); textSize = 10.5f * density }
+    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD) }
     private var title = ""
     private var subtitle = ""
     private var artUri: String? = null
@@ -156,15 +169,12 @@ private class IslandView(
     private var artJob: Job? = null
 
     private var camera = Camera.NONE
-    /** The camera's hole, in this view's coordinates (centre case): left and right edge. */
     private var holeLeft = 0f
     private var holeRight = 0f
     private var screenW = context.resources.displayMetrics.widthPixels
     private var cutout: Rect? = null
     private var placed = false
-
-    /** 0 → hidden, 1 → fully out; the entrance. */
-    private var reveal = 0f
+    private var revealFrom = 0L
     private var startedAt = 0L
     private val clock = ValueAnimator.ofFloat(0f, 1f).apply {
         duration = 1000
@@ -175,17 +185,17 @@ private class IslandView(
     private var downX = 0f
     private var downT = 0L
 
-    // Fixed sizes (dp): nothing grows with the title; a long title scrolls instead.
-    private val h = 36 * density
-    private val artSize = 28 * density
-    private val textBox = 104 * density
-    private val iconBox = 22 * density
-    private val heartBox = 12 * density
-    private val pad = 4 * density
-    private val gap = 8 * density
-    private val holeGap: Float get() = if (camera == Camera.CENTRE) (cutout?.width() ?: 0) + 10 * density else 0f
-
-    private val widthPx: Int get() = (pad + artSize + gap + textBox + gap + holeGap + iconBox + 6 * density + heartBox + 12 * density).toInt()
+    // The capsule is as tall as the camera's hole (Buxes); everything inside scales with that.
+    private var h = 32 * density
+    private val artSize: Float get() = h - 6 * density
+    private val textBox: Float get() = 112 * density
+    private val iconBox: Float get() = h * 0.6f
+    private val heartBox: Float get() = h * 0.34f
+    private val pad: Float get() = 3 * density
+    private val gap: Float get() = 7 * density
+    private val holeGap: Float get() = if (camera == Camera.CENTRE) (cutout?.width() ?: 0) + 8 * density else 0f
+    private val leftPart: Float get() = pad + artSize + gap + textBox + gap
+    private val widthPx: Int get() = (leftPart + holeGap + iconBox + 5 * density + heartBox + 10 * density).toInt()
 
     fun bind(title: String, subtitle: String, artworkUri: String?, playing: Boolean) {
         if (title != this.title) startedAt = System.currentTimeMillis()
@@ -196,7 +206,7 @@ private class IslandView(
             artJob?.cancel()
             artJob = artworkUri?.let { uri ->
                 graph.appScope.launch {
-                    art = runCatching { graph.artworkLoader.load(uri, artSize.toInt())?.asAndroidBitmap() }.getOrNull()
+                    art = runCatching { graph.artworkLoader.load(uri, (40 * density).toInt())?.asAndroidBitmap() }.getOrNull()
                     invalidate()
                 }
             }
@@ -218,21 +228,21 @@ private class IslandView(
         val rect = if (Build.VERSION.SDK_INT >= 28) rootWindowInsets?.displayCutout?.boundingRects?.minByOrNull { it.top } else null
         cutout = rect
         camera = when {
-            rect == null || rect.top > 48 * density -> Camera.NONE
+            rect == null || rect.top > 48 * density || rect.height() < 12 * density -> Camera.NONE
             rect.centerX() in (screenW * 0.35f).toInt()..(screenW * 0.65f).toInt() -> Camera.CENTRE
             rect.centerX() < screenW / 2 -> Camera.LEFT
             else -> Camera.RIGHT
         }
+        h = (rect?.height()?.toFloat() ?: (32 * density)).coerceIn(26 * density, 48 * density)
+        textPaint.textSize = (h * 0.38f).coerceIn(11 * density, 15 * density)
         val x: Int
         val y: Int
         when (camera) {
             Camera.CENTRE -> {
-                // The capsule centred on the camera, a little taller than its hole.
-                val cx = rect!!.centerX()
-                x = (cx - (pad + artSize + gap + textBox + gap + holeGap / 2f)).toInt()
+                x = (rect!!.centerX() - (leftPart + holeGap / 2f)).toInt()
                 y = (rect.centerY() - h / 2f).toInt().coerceAtLeast(0)
-                holeLeft = rect.left - x - 5 * density
-                holeRight = rect.right - x + 5 * density
+                holeLeft = rect.left - x - 4 * density
+                holeRight = rect.right - x + 4 * density
             }
             Camera.LEFT, Camera.RIGHT -> {
                 x = (screenW - widthPx) / 2
@@ -245,28 +255,24 @@ private class IslandView(
             }
         }
         placed = true
-        reveal = 0f
         revealFrom = System.currentTimeMillis()
         place(x, y)
         requestLayout()
         invalidate()
     }
 
-    private var revealFrom = 0L
-
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) = setMeasuredDimension(widthPx, h.toInt())
 
     override fun onDraw(canvas: Canvas) {
         if (!placed) return
         val now = System.currentTimeMillis()
-        reveal = ((now - revealFrom) / 420f).coerceIn(0f, 1f)
-        val e = 1f - (1f - reveal) * (1f - reveal) * (1f - reveal) // ease out
+        val reveal = ((now - revealFrom) / 420f).coerceIn(0f, 1f)
+        val e = 1f - (1f - reveal) * (1f - reveal) * (1f - reveal)
         val w = width.toFloat(); val r = h / 2f
         val alpha = e
         canvas.save()
         when (camera) {
             Camera.CENTRE -> {
-                // Opens out from both sides of the camera.
                 val cx = (holeLeft + holeRight) / 2f
                 val half = (holeRight - holeLeft) / 2f + (maxOf(cx, w - cx) - (holeRight - holeLeft) / 2f) * e
                 canvas.clipRect(cx - half, 0f, cx + half, h)
@@ -275,12 +281,13 @@ private class IslandView(
             Camera.RIGHT -> canvas.translate((1f - e) * (w + screenW / 2f), 0f)
             Camera.NONE -> canvas.translate(0f, -(1f - e) * (h + 12 * density))
         }
-        // The capsule.
+        // The glass: dark and see-through, with a thin bright rim.
+        val blurred = Build.VERSION.SDK_INT >= 31
         paint.shader = null
         paint.style = Paint.Style.FILL
-        paint.color = Color.argb((228 * alpha).toInt(), 16, 16, 20)
+        paint.color = Color.argb(((if (blurred) 120 else 170) * alpha).toInt(), 10, 10, 14)
         canvas.drawRoundRect(RectF(0f, 0f, w, h), r, r, paint)
-        paint.style = Paint.Style.STROKE; paint.strokeWidth = density; paint.color = Color.argb((55 * alpha).toInt(), 255, 255, 255)
+        paint.style = Paint.Style.STROKE; paint.strokeWidth = density; paint.color = Color.argb((70 * alpha).toInt(), 255, 255, 255)
         canvas.drawRoundRect(RectF(0.5f * density, 0.5f * density, w - 0.5f * density, h - 0.5f * density), r, r, paint)
         paint.style = Paint.Style.FILL
 
@@ -299,22 +306,22 @@ private class IslandView(
             paint.color = Color.WHITE
             paint.alpha = (255 * alpha).toInt()
         } else {
-            paint.color = Color.argb((255 * alpha).toInt(), 60, 60, 70)
+            paint.color = Color.argb((255 * alpha).toInt(), 70, 70, 80)
         }
         canvas.drawCircle(x + artSize / 2f, h / 2f, artSize / 2f, paint)
         paint.shader = null
         x += artSize + gap
 
-        // Title and artist in a fixed box; a long one scrolls, resting a moment at its start.
-        titlePaint.alpha = (255 * alpha).toInt(); subPaint.alpha = (200 * alpha).toInt()
+        // One line: the title runs through, then the artist, in turns.
+        textPaint.alpha = (255 * alpha).toInt()
         canvas.save()
         canvas.clipRect(x, 0f, x + textBox, h)
-        marquee(canvas, title, titlePaint, x, h / 2f - 2.5f * density, now)
-        marquee(canvas, subtitle, subPaint, x, h / 2f + 10 * density, now)
+        val baseline = h / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
+        runningLine(canvas, x, baseline, now)
         canvas.restore()
         x += textBox + gap + holeGap
 
-        // Play or pause, breathing while the music plays (the Now Playing key's own motion).
+        // Play or pause, breathing while the music plays.
         val t = ((now % 1400L) / 1400f)
         val breath = if (playing) 1f + 0.08f * sin(t * 2f * Math.PI.toFloat()) else 1f
         paint.color = Color.argb((255 * alpha).toInt(), 255, 255, 255)
@@ -322,18 +329,18 @@ private class IslandView(
         canvas.save()
         canvas.scale(breath, breath, icx, icy)
         if (playing) {
-            val bw = 3.2f * density; val bh = 12 * density; val sp = 2.4f * density
+            val bw = iconBox * 0.16f; val bh = iconBox * 0.6f; val sp = iconBox * 0.12f
             canvas.drawRoundRect(RectF(icx - sp / 2 - bw, icy - bh / 2, icx - sp / 2, icy + bh / 2), bw / 2, bw / 2, paint)
             canvas.drawRoundRect(RectF(icx + sp / 2, icy - bh / 2, icx + sp / 2 + bw, icy + bh / 2), bw / 2, bw / 2, paint)
         } else {
-            val s = 6.5f * density
+            val s = iconBox * 0.32f
             val tri = Path().apply {
                 moveTo(icx - s * 0.8f, icy - s); lineTo(icx + s, icy); lineTo(icx - s * 0.8f, icy + s); close()
             }
             canvas.drawPath(tri, paint)
         }
         canvas.restore()
-        x += iconBox + 6 * density
+        x += iconBox + 5 * density
 
         // A small heart that beats with it.
         val beat = if (playing) 0.55f + 0.45f * (0.5f + 0.5f * sin((t * 2f + 0.5f) * Math.PI.toFloat())) else 0.5f
@@ -343,18 +350,30 @@ private class IslandView(
         canvas.restore()
     }
 
-    private fun marquee(canvas: Canvas, text: String, p: Paint, left: Float, baseline: Float, now: Long) {
-        val tw = p.measureText(text)
-        if (tw <= textBox) { canvas.drawText(text, left, baseline, p); return }
-        val space = 28 * density
-        val cycle = tw + space
-        val speed = 28 * density / 1000f // px per ms
-        val rest = 1600L
-        val elapsed = now - startedAt
-        val travelled = ((elapsed - rest).coerceAtLeast(0L) * speed) % (cycle + rest * speed)
-        val offset = travelled.coerceAtMost(cycle)
-        canvas.drawText(text, left - offset, baseline, p)
-        canvas.drawText(text, left - offset + cycle, baseline, p)
+    /**
+     * The title, then the artist, each shown whole: a short one rests for a while, a long one rests
+     * a moment, scrolls through to its end, rests again, then gives way to the other.
+     */
+    private fun runningLine(canvas: Canvas, left: Float, baseline: Float, now: Long) {
+        val speed = 30 * density / 1000f
+        val rest = 1500L
+        fun spanOf(text: String): Long {
+            val tw = textPaint.measureText(text)
+            return if (tw <= textBox) 2800L else rest + ((tw - textBox) / speed).toLong() + rest
+        }
+        val a = spanOf(title); val b = spanOf(subtitle.ifEmpty { title })
+        val total = a + b
+        var at = (now - startedAt) % total
+        val text: String
+        val span: Long
+        if (at < a) { text = title; span = a } else { at -= a; text = subtitle.ifEmpty { title }; span = b }
+        val tw = textPaint.measureText(text)
+        val offset = if (tw <= textBox) 0f else ((at - rest).coerceIn(0L, span - 2 * rest) * speed).coerceAtMost(tw - textBox)
+        // A soft fade at the change.
+        val edge = 250f
+        val fade = minOf(at / edge, (span - at) / edge, 1f)
+        textPaint.alpha = (textPaint.alpha * fade.coerceIn(0f, 1f)).toInt()
+        canvas.drawText(text, left - offset, baseline, textPaint)
     }
 
     private fun drawHeart(canvas: Canvas, cx: Float, cy: Float, size: Float, p: Paint) {

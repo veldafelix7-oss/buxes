@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Island is a fixed small capsule: a long title or artist scrolls inside it instead of widening it.
 - The Island knows where the front camera is: in the middle it opens out from both sides of the camera (the camera sits in its gap); in a corner it slides in from the other side; without one it drops down from the top. It sits level with the camera, never under it.
 - The moving bars are replaced by the play/pause mark that breathes with the music, and a small heart that beats beside it.
+- The Island is as tall as the camera's hole and glass: what's behind shows through (blurred on Android 12 and up).
+- One line of text: the title runs through, then the artist, in turns.
+- The Island and the media notification appear only once something has played; opening the app with its restored, paused queue shows neither.
+- Swiping the app away from Recents takes the Island with it, until the next play.
 
 ### Removed
 - The Island inside the app (only the one over other apps remains).

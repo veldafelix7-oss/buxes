@@ -49,6 +49,9 @@ interface PlaybackDependencies {
     /** The sleep timer the listener sets (D-75); null: none. */
     val sleepTimer: SleepTimer? get() = null
 
+    /** The app's task was swiped away from Recents (Buxes): anything shown outside the app goes. */
+    fun onTaskRemoved() {}
+
     /** Suggestions for autoplay; null turns autoplay off. */
     val recommendations: RecommendationEngine? get() = null
 
