@@ -20,8 +20,8 @@ android {
         // Provisional: the product name is pending trademark clearance (docs/repository-audit.md §5).
         applicationId = "app.buxes"
         // A device test of the updater (D-99) builds a "newer" copy: -Pbuxes.versionCode=7 -Pbuxes.versionName=0.1.5.1
-        versionCode = providers.gradleProperty("buxes.versionCode").orNull?.toInt() ?: 10
-        versionName = providers.gradleProperty("buxes.versionName").orNull ?: "1.6.1"
+        versionCode = providers.gradleProperty("buxes.versionCode").orNull?.toInt() ?: 11
+        versionName = providers.gradleProperty("buxes.versionName").orNull ?: "1.6.2"
     }
     buildFeatures {
         buildConfig = true
@@ -103,6 +103,8 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    // The Island over other apps (Buxes) hosts a Compose view in its own window.
+    implementation(libs.androidx.savedstate)
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.navigation3.ui)
     // Sticker cutout on the phone (D-55): LiteRT runs the bundled magic-touch model.
