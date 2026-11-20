@@ -387,6 +387,13 @@ fun BuxesApp(graph: AppGraph, onSourceAction: (CapabilityAction) -> Unit, onTurn
         val item = playingItem.item ?: return@LaunchedEffect
         if (item.kind == app.buxes.core.model.MediaKind.LIVE) return@LaunchedEffect
         app.buxes.feature.nowplaying.ArtistPictures.prefetch(appContext, item.artistDisplay, item.title)
+        // The words too (Buxes): looked up now, so the Lyrics screen opens on them; the repository
+        // keeps them, so they are there offline afterwards. Only once the listener allowed online lyrics.
+        if (graph.deviceSettings.onlineLyrics.value) {
+            graph.appScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { graph.lyricsGateway.lyrics(app.buxes.core.lyrics.LyricsRequest(item.trackId.value, item.title, item.artistDisplay, item.albumTitle, item.durationMs)) }
+            }
+        }
         // The pictures of artists no longer coming up are let go, a little after the music moved on.
         val queued = graph.playbackController.queue.value.entries.map { it.artistDisplay }
         app.buxes.feature.nowplaying.ArtistPictures.sweep(appContext, queued + item.artistDisplay)
