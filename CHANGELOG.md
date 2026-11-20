@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-11-20
+
+### Fixed
+- Leaving the app with the Island on could crash Buxes, stopping the music and losing the queue's place. The Island's orb is now drawn by hand in its own window (no Compose there), and whatever goes wrong inside the Island can only quiet the Island, never the music.
+
 ## [1.6.2] - 2026-11-20
 
 ### Changed

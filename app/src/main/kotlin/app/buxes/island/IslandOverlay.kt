@@ -12,6 +12,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.RectF
 import android.graphics.Shader
@@ -25,25 +26,11 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.animation.LinearInterpolator
-import android.widget.FrameLayout
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.LifecycleRegistry
-import androidx.lifecycle.setViewTreeLifecycleOwner
-import androidx.savedstate.SavedStateRegistry
-import androidx.savedstate.SavedStateRegistryController
-import androidx.savedstate.SavedStateRegistryOwner
-import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import app.buxes.AppGraph
 import app.buxes.MainActivity
-import app.buxes.core.designsystem.theme.BuxesTheme
-import app.buxes.feature.nowplaying.IslandOrb
+import app.buxes.core.designsystem.orb.OrbFace
+import app.buxes.feature.nowplaying.IslandOrbDriver
 import app.buxes.player.api.PlayIntent
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -52,6 +39,10 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sin
 
 /**
  * The Island outside the app (Buxes): a small dark glass capsule at the top of the display with the
@@ -174,24 +165,13 @@ class IslandOverlay(private val app: Application, private val graph: AppGraph) {
     }
 }
 
-/** What a Compose view needs of its window: a lifecycle and a (never used) saved state. */
-private class OverlayOwner : LifecycleOwner, SavedStateRegistryOwner {
-    private val registry = LifecycleRegistry(this)
-    private val savedState = SavedStateRegistryController.create(this)
-    override val lifecycle: Lifecycle get() = registry
-    override val savedStateRegistry: SavedStateRegistry get() = savedState.savedStateRegistry
-    init { savedState.performRestore(null) }
-    fun start() { registry.currentState = Lifecycle.State.RESUMED }
-    fun stop() { registry.currentState = Lifecycle.State.DESTROYED }
-}
-
 @SuppressLint("ViewConstructor")
 private class IslandView(
     context: Context,
     private val graph: AppGraph,
     private val density: Float,
     private val place: (y: Int) -> Unit,
-) : FrameLayout(context) {
+) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD) }
     private var title = ""
@@ -199,10 +179,9 @@ private class IslandView(
     private var artUri: String? = null
     private var art: Bitmap? = null
     private var artJob: Job? = null
-    private var playingState by mutableStateOf(false)
-
-    private val owner = OverlayOwner()
-    private val orb = ComposeView(context)
+    private var playing = false
+    private val orb = IslandOrbDriver(graph.playbackController, graph.audioPulse)
+    private var lastFrame = -1L
 
     private var placed = false
     private var revealFrom = 0L
@@ -225,23 +204,10 @@ private class IslandView(
     private val gap: Float get() = 8 * density
     private val widthPx: Int get() = (pad + artSize + gap + textBox + gap + orbSize + 6 * density).toInt()
 
-    init {
-        setWillNotDraw(false)
-        clipChildren = false
-        orb.setViewTreeLifecycleOwner(owner)
-        orb.setViewTreeSavedStateRegistryOwner(owner)
-        addView(orb, LayoutParams(orbSize.toInt(), orbSize.toInt()))
-        orb.setContent {
-            BuxesTheme(darkTheme = true) {
-                IslandOrb(playingState, graph.playbackController, graph.audioPulse, with(androidx.compose.ui.platform.LocalDensity.current) { orbSize.toDp() })
-            }
-        }
-    }
-
     fun bind(title: String, subtitle: String, artworkUri: String?, playing: Boolean) {
         if (title != this.title) startedAt = System.currentTimeMillis()
         this.title = title; this.subtitle = subtitle
-        playingState = playing
+        this.playing = playing
         if (artworkUri != artUri || (art == null && artJob?.isActive != true)) {
             artUri = artworkUri
             art = null
@@ -256,11 +222,10 @@ private class IslandView(
         invalidate()
     }
 
-    fun stop() { clock.cancel(); artJob?.cancel(); owner.stop() }
+    fun stop() { clock.cancel(); artJob?.cancel() }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        owner.start()
         if (!clock.isRunning) clock.start()
         startedAt = System.currentTimeMillis()
         post { settle() }
@@ -278,7 +243,6 @@ private class IslandView(
             status + (4 * density).toInt()
         }
         textPaint.textSize = (h * 0.37f).coerceIn(11.5f * density, 14 * density)
-        (orb.layoutParams as LayoutParams).apply { width = orbSize.toInt(); height = orbSize.toInt() }
         placed = true
         revealFrom = System.currentTimeMillis()
         place(y)
@@ -286,29 +250,31 @@ private class IslandView(
         invalidate()
     }
 
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val w = widthPx
-        val hh = h.toInt()
-        val o = orbSize.toInt()
-        orb.measure(MeasureSpec.makeMeasureSpec(o, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(o, MeasureSpec.EXACTLY))
-        setMeasuredDimension(w, hh)
-    }
-
-    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        val o = orbSize.toInt()
-        val l = (pad + artSize + gap + textBox + gap).toInt()
-        val t = ((h - o) / 2f).toInt()
-        orb.layout(l, t, l + o, t + o)
-    }
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) = setMeasuredDimension(widthPx, h.toInt())
 
     private fun reveal(now: Long): Float {
         val r = ((now - revealFrom) / 460f).coerceIn(0f, 1f)
         return 1f - (1f - r) * (1f - r) * (1f - r)
     }
 
-    override fun dispatchDraw(canvas: Canvas) {
+    override fun onDraw(canvas: Canvas) {
         if (!placed) return
+        // Whatever goes wrong in the Island must never take the music with it: it goes quiet instead.
+        try {
+            paint(canvas)
+        } catch (e: Exception) {
+            placed = false
+            clock.cancel()
+            setWillNotDraw(true)
+        }
+    }
+
+    private fun paint(canvas: Canvas) {
         val now = System.currentTimeMillis()
+        // The orb's mind moves on by the time since the last frame (as Now Playing's does).
+        val dt = if (lastFrame < 0L) 0f else (now - lastFrame).toFloat().coerceAtMost(100f)
+        lastFrame = now
+        orb.tick(dt, playing)
         val e = reveal(now)
         val w = width.toFloat(); val r = h / 2f
         // Opens out from its middle to both sides.
@@ -363,11 +329,111 @@ private class IslandView(
         }
         canvas.restore()
 
-        // The orb (a Compose child) last, inside the same opening.
-        super.dispatchDraw(canvas)
+        // The live orb, inside the same opening.
+        x += textBox + gap
+        drawOrb(canvas, x, (h - orbSize) / 2f, orbSize, orb.face)
         canvas.restore()
         if (e < 1f) invalidate()
     }
+
+    /**
+     * Now Playing's live orb, drawn by hand: its body (round while the music plays, a settled pebble
+     * when it is stopped) squashed, bobbed, rolled and leaned as its face says, its two eyes, and
+     * the stars it throws off. The same geometry as the Compose orb, in the same shares of its size.
+     */
+    private fun drawOrb(canvas: Canvas, left: Float, top: Float, d: Float, f: OrbFace) {
+        val cx = left + d / 2f; val cy = top + d / 2f
+        canvas.save()
+        canvas.translate(f.shiftX * d * OrbFace.RollTravel, -f.bob * d * OrbFace.BobTravel)
+        canvas.rotate(f.tilt, cx, cy)
+        canvas.scale(f.scaleX, f.scaleY, cx, cy)
+        // The body: frosted white glass with a bright rim.
+        val target = if (playing) d / 2f else d * 0.34f
+        bodyCorner = if (bodyCorner < 0f) target else bodyCorner + (target - bodyCorner) * 0.18f
+        val body = RectF(left, top, left + d, top + d)
+        paint.shader = null
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(214, 244, 240, 232)
+        canvas.drawRoundRect(body, bodyCorner, bodyCorner, paint)
+        paint.style = Paint.Style.STROKE; paint.strokeWidth = density; paint.color = Color.argb(140, 255, 255, 255)
+        canvas.drawRoundRect(body, bodyCorner, bodyCorner, paint)
+        paint.style = Paint.Style.FILL
+        canvas.restore()
+        // The eyes ride the body's lean, roll and bob in full and its squash halfway.
+        val give = OrbFace.EyeFollow
+        canvas.save()
+        canvas.scale(1f + (f.scaleX - 1f) * give, 1f + (f.scaleY - 1f) * give, cx, cy)
+        canvas.rotate(f.tilt, cx, cy)
+        val gapX = d * OrbFace.EyeGap
+        val gx = f.gazeX.coerceIn(-1f, 1f) * d * OrbFace.GazeReachX + f.shiftX * d * OrbFace.RollTravel
+        val gy = f.gazeY.coerceIn(-1f, 1f) * d * OrbFace.GazeReachY
+        val y = cy - d * OrbFace.EyeAbove - f.bob * d * OrbFace.BobTravel + gy
+        val skew = f.eyeSkew.coerceIn(-1f, 1f)
+        val bend = f.eyeBend.coerceIn(-1f, 1f)
+        inkPaint.strokeCap = Paint.Cap.ROUND
+        for (side in -1..1 step 2) {
+            val ax = cx + side * gapX + gx
+            val w = d * OrbFace.EyeWidth * f.eyeWidth.coerceIn(0.04f, 3f)
+            val open = f.eyeHeight * (1f + side * skew * OrbFace.SkewReach)
+            val eh = d * OrbFace.EyeHeight * open.coerceIn(0.02f, 3f)
+            val thick = min(w, eh)
+            val along = (max(w, eh) - thick) / 2f
+            canvas.save()
+            canvas.rotate(-side * f.eyeLean, ax, y)
+            if (along <= 0.25f) {
+                inkPaint.style = Paint.Style.FILL
+                canvas.drawCircle(ax, y, thick / 2f, inkPaint)
+            } else {
+                val rise = bend * along * 0.40f * 2f
+                val path = Path()
+                if (eh >= w) {
+                    path.moveTo(ax, y - along); path.quadTo(ax + side * rise, y, ax, y + along)
+                } else {
+                    path.moveTo(ax - along, y); path.quadTo(ax, y - rise, ax + along, y)
+                }
+                inkPaint.style = Paint.Style.STROKE; inkPaint.strokeWidth = thick
+                canvas.drawPath(path, inkPaint)
+            }
+            canvas.restore()
+        }
+        canvas.restore()
+        // The stars.
+        val t = f.spark
+        if (t > 0f && t < 1f) {
+            val fx = cx + f.shiftX * d * OrbFace.RollTravel
+            val fy = cy - f.bob * d * OrbFace.BobTravel
+            val flight = 1f - (1f - t) * (1f - t)
+            val show = sin(Math.PI.toFloat() * t)
+            for (i in sparkAngles.indices) {
+                val a = Math.toRadians(sparkAngles[i].toDouble()).toFloat()
+                val reach = d * (0.46f + 0.40f * sparkReach[i]) * flight
+                drawSpark(canvas, fx + cos(a) * reach, fy + sin(a) * reach, d * sparkSize[i] * (0.45f + 0.55f * show), (255 * show).toInt(), t * 60f + i * 27f)
+            }
+        }
+    }
+
+    private fun drawSpark(canvas: Canvas, x: Float, y: Float, radius: Float, alpha: Int, spin: Float) {
+        if (radius <= 0.2f) return
+        val inner = radius * 0.24f
+        val path = Path()
+        for (k in 0 until 4) {
+            val tip = Math.toRadians((spin + k * 90f).toDouble()).toFloat()
+            val waist = Math.toRadians((spin + k * 90f + 45f).toDouble()).toFloat()
+            val next = Math.toRadians((spin + k * 90f + 90f).toDouble()).toFloat()
+            if (k == 0) path.moveTo(x + cos(tip) * radius, y + sin(tip) * radius)
+            path.quadTo(x + cos(waist) * inner, y + sin(waist) * inner, x + cos(next) * radius, y + sin(next) * radius)
+        }
+        path.close()
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(alpha, 255, 255, 255)
+        canvas.drawPath(path, paint)
+    }
+
+    private var bodyCorner = -1f
+    private val inkPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0x1B, 0x19, 0x16) }
+    private val sparkAngles = floatArrayOf(-142f, -112f, -86f, -58f, -32f)
+    private val sparkReach = floatArrayOf(0.55f, 0.82f, 1f, 0.72f, 0.48f)
+    private val sparkSize = floatArrayOf(0.070f, 0.052f, 0.086f, 0.048f, 0.066f)
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -384,8 +450,6 @@ private class IslandView(
         }
         return super.onTouchEvent(event)
     }
-
-    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = true
 
     private fun open() {
         val intent = Intent(context, MainActivity::class.java).apply {
