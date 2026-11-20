@@ -337,6 +337,9 @@ class AppGraph(val context: Context) {
         if (localSource.hasPermission() != musicAccess) onPermissionsChanged()
     }
 
+    /** Fires when the app's task is swiped away from Recents (Buxes). */
+    val taskRemoved = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
     val playbackDependencies = object : PlaybackDependencies {
         override val registry = this@AppGraph.registry
         override val health = this@AppGraph.health
@@ -348,6 +351,7 @@ class AppGraph(val context: Context) {
         override val autoplay = this@AppGraph.autoplaySettings
         override val effects = this@AppGraph.deviceSettings.effects
         override val sleepTimer = this@AppGraph.sleepTimer
+        override fun onTaskRemoved() { taskRemoved.tryEmit(Unit) }
         override val audioMeter = this@AppGraph.audioMeter
         override val recommendations = this@AppGraph.recommendations
         override val equivalence = this@AppGraph.equivalence

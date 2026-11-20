@@ -124,13 +124,6 @@ class SharedPrefsDeviceSettings(context: Context) : DeviceSettingsRepository {
         prefs.edit { putBoolean(KEY_TITLE_BAR_BATTERY, shown) }
     }
 
-    private val _island = MutableStateFlow(prefs.getBoolean(KEY_ISLAND, true))
-    override val island: StateFlow<Boolean> = _island.asStateFlow()
-    override fun setIsland(enabled: Boolean) {
-        _island.value = enabled
-        prefs.edit { putBoolean(KEY_ISLAND, enabled) }
-    }
-
     private val _islandOverlay = MutableStateFlow(prefs.getBoolean(KEY_ISLAND_OVERLAY, true))
     override val islandOverlay: StateFlow<Boolean> = _islandOverlay.asStateFlow()
     override fun setIslandOverlay(enabled: Boolean) {
@@ -287,7 +280,6 @@ class SharedPrefsDeviceSettings(context: Context) : DeviceSettingsRepository {
         const val KEY_BUXES_KEYBOARD = "buxes_keyboard"
         const val KEY_IMMERSIVE = "immersive"
         const val KEY_TITLE_BAR_BATTERY = "title_bar_battery"
-        const val KEY_ISLAND = "island"
         const val KEY_ISLAND_OVERLAY = "island_overlay"
         const val KEY_ISLAND_ASKED = "island_asked"
         const val KEY_GLITTER = "glitter"

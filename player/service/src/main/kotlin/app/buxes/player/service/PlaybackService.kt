@@ -51,12 +51,27 @@ class PlaybackService : MediaLibraryService() {
         val built = builder.build()
         session = built
         engine.onExtrasChanged = { extras -> built.setSessionExtras(extras) }
+        // The notification waits for the first play (Buxes): a restored queue alone shows nothing.
+        sessionPlayer.addListener(object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) played = true
+            }
+        })
+    }
+
+    /** Whether anything has played since the service started; before that, no notification. */
+    private var played = false
+
+    override fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
+        if (!played && !startInForegroundRequired) return
+        super.onUpdateNotification(session, startInForegroundRequired)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
     /** Swiping the app away keeps music playing; if nothing is playing, the service goes away. */
     override fun onTaskRemoved(rootIntent: Intent?) {
+        (application as PlaybackDependencies.Provider).playbackDependencies.onTaskRemoved()
         val player = session?.player
         if (player == null || !player.playWhenReady || player.mediaItemCount == 0) stopSelf()
     }

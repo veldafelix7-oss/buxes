@@ -75,11 +75,6 @@ interface DeviceSettingsRepository {
 
     fun setTitleBarBattery(shown: Boolean) {}
 
-    /** The Island (Buxes): a small capsule at the top with the cover, the title and the beat, in the app. */
-    val island: StateFlow<Boolean> get() = On
-
-    fun setIsland(enabled: Boolean) {}
-
     /** The Island over other apps too, when Android lets Buxes draw over them. */
     val islandOverlay: StateFlow<Boolean> get() = On
 

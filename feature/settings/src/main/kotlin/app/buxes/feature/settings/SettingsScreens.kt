@@ -71,7 +71,7 @@ import app.buxes.core.interaction.WheelContext
 import app.buxes.core.interaction.rememberFocusListState
 import app.buxes.core.interaction.rememberBuxesHaptics
 
-private enum class SettingsRow { Appearance, BuxesSpace, FullScreen, TitleBarBattery, Island, IslandOverlay, NowPlayingLayout, HideNowPlayingTray, Keyboard, MusicFolders, OnlineSources, Autoplay, Recommendations, AvoidRepeats, Crossfade, Equalizer, SleepTimer, OnlineLyrics, LyricsCredit, Haptics, Clicks, StartupSound, SoftwareUpdate }
+private enum class SettingsRow { Appearance, BuxesSpace, FullScreen, TitleBarBattery, IslandOverlay, NowPlayingLayout, HideNowPlayingTray, Keyboard, MusicFolders, OnlineSources, Autoplay, Recommendations, AvoidRepeats, Crossfade, Equalizer, SleepTimer, OnlineLyrics, LyricsCredit, Haptics, Clicks, StartupSound, SoftwareUpdate }
 
 /** Settings ▸ Software update (D-99): the version, a check now, and whether Buxes checks by itself. */
 interface SoftwareUpdateSettings {
@@ -122,7 +122,6 @@ fun SettingsScreen(
     val nostalgicNowPlaying by repository.nostalgicNowPlaying.collectAsStateWithLifecycle()
     val immersive by repository.immersive.collectAsStateWithLifecycle()
     val titleBarBattery by repository.titleBarBattery.collectAsStateWithLifecycle()
-    val island by repository.island.collectAsStateWithLifecycle()
     val islandOverlay by repository.islandOverlay.collectAsStateWithLifecycle()
     val folderList by folders.folders.collectAsStateWithLifecycle()
     val selection by folders.selection.collectAsStateWithLifecycle()
@@ -165,10 +164,6 @@ fun SettingsScreen(
             SettingsRow.TitleBarBattery -> if (!immersive) haptics.reject() else {
                 haptics.toggle(on = !titleBarBattery)
                 repository.setTitleBarBattery(!titleBarBattery)
-            }
-            SettingsRow.Island -> {
-                haptics.toggle(on = !island)
-                repository.setIsland(!island)
             }
             SettingsRow.IslandOverlay -> {
                 haptics.toggle(on = !islandOverlay)
@@ -282,8 +277,7 @@ fun SettingsScreen(
                 enabled = immersive,
                 showChevron = false,
             )
-            // The Island (Buxes): the capsule at the top; in the app, and over other apps when allowed.
-            SettingsRow.Island -> MenuRow("Island", focused, value = if (island) "On" else "Off", showChevron = false)
+            // The Island (Buxes): the capsule over other apps while music plays, when Android allows it.
             SettingsRow.IslandOverlay -> MenuRow("Island over other apps", focused, value = if (islandOverlay) "On" else "Off", showChevron = false)
             // Nostalgic (D-109): the original's own Now Playing, with no playback keys on the display.
             SettingsRow.NowPlayingLayout -> MenuRow(
