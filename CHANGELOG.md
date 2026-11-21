@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.4] - 2026-11-21
+
+### Changed
+- The Island sits a little lower, level with the camera; its glass carries the song's own cover, softened, like the app's displays; the running text melts away at both ends instead of being cut off.
+- A song by several artists shows pictures of all of them, in turns (Shawn Mendes and Camila Cabello, not just one).
+- Far more shouted words in the lyrics: every chorus (and every fast line) has one word cut from paper, and many more strong words count as hot.
+
 ## [1.6.3] - 2026-11-20
 
 ### Fixed

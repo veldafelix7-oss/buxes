@@ -12,6 +12,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -50,15 +51,39 @@ object ArtistPictures {
     private val flows = HashMap<String, MutableStateFlow<List<File>>>()
     private val started = HashSet<String>()
 
-    /** The pictures for [artist], filling in as they're found; empty while none (or when none). */
+    /**
+     * The pictures for [artist], filling in as they're found; empty while none (or when none). A song
+     * by several artists ("Shawn Mendes, Camila Cabello", "A feat. B") shows all of them: each is
+     * looked up on their own and their pictures take turns.
+     */
     fun pictures(context: Context, artist: String?, title: String?): StateFlow<List<File>> {
-        val name = artist?.let(::cleanArtist).orEmpty()
+        val names = artist?.let(::artistsOf).orEmpty()
+        if (names.size <= 1) return one(context, names.firstOrNull().orEmpty(), title)
+        val key = "all-" + keyOf(names.joinToString("|"))
+        synchronized(flows) { flows[key] }?.let { return it }
+        val parts = names.map { one(context, it, title) }
+        val flow = synchronized(flows) { flows.getOrPut(key) { MutableStateFlow(emptyList()) } }
+        scope.launch {
+            combine(parts) { lists -> interleave(lists.toList()) }.collect { flow.value = it }
+        }
+        return flow
+    }
+
+    private fun one(context: Context, name: String, title: String?): StateFlow<List<File>> {
         val key = keyOf(name)
         val flow = synchronized(flows) { flows.getOrPut(key) { MutableStateFlow(emptyList()) } }
         if (name.isBlank()) return flow
         val fresh = synchronized(started) { started.add(key) }
         if (fresh) scope.launch { fill(context.applicationContext, key, name, title, flow) }
         return flow
+    }
+
+    /** One of each in turn (A1, B1, A2, B2, …), so no artist waits for the other's whole set. */
+    private fun interleave(lists: List<List<File>>): List<File> {
+        val out = ArrayList<File>()
+        val most = lists.maxOfOrNull { it.size } ?: 0
+        for (i in 0 until most) for (l in lists) l.getOrNull(i)?.let { out += it }
+        return out.take(MAX)
     }
 
     /** Looks the artist up now so the Lyrics screen finds the pictures ready. */
@@ -81,7 +106,7 @@ object ArtistPictures {
      * the music moved on so the player isn't competing with it.
      */
     fun sweep(context: Context, keep: Collection<String?>, delayMs: Long = 5000L) {
-        val keepKeys = keep.mapNotNull { it?.let(::cleanArtist)?.takeIf(String::isNotBlank)?.let(::keyOf) }.toSet()
+        val keepKeys = keep.flatMap { it?.let(::artistsOf).orEmpty() }.map(::keyOf).toSet()
         val app = context.applicationContext
         scope.launch {
             delay(delayMs)
@@ -335,14 +360,16 @@ object ArtistPictures {
         return "$root/thumb/$hash/$name/${THUMB_PX}px-$name"
     }
 
-    private fun cleanArtist(artist: String): String {
+    /** Every artist named in [artist], in order, cleaned; at most four. */
+    private fun artistsOf(artist: String): List<String> {
         var s = artist
         s = s.replace(Regex("""(?i)\s*-\s*topic$"""), "")
         s = s.replace(Regex("""(?i)\s*(vevo|official)$"""), "")
-        s = s.split(Regex("""\s*[,&/]\s*"""), limit = 2).first()
-        s = s.split(Regex("""(?i)\s+(feat\.?|ft\.?|featuring|with|x|×)\s+"""), limit = 2).first()
-        return s.trim()
+        s = s.replace(Regex("""(?i)\s*[\(\[]\s*(feat\.?|ft\.?|featuring|with)\s+([^\)\]]*)[\)\]]"""), ", $2")
+        return s.split(Regex("""\s*(,|&|/|;|\s+feat\.?\s+|\s+ft\.?\s+|\s+featuring\s+|\s+with\s+|\s+x\s+|\s+×\s+|\s+and\s+|\s+dan\s+)\s*""", RegexOption.IGNORE_CASE))
+            .map { it.trim() }.filter { it.isNotBlank() }.distinct().take(4)
     }
+
 
     private fun cleanTitle(title: String): String {
         var s = title

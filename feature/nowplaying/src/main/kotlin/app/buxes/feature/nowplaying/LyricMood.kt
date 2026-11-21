@@ -41,7 +41,7 @@ internal object LyricMood {
     fun moods(words: List<String>, pace: LinePace, chorus: Boolean): List<WordMood> {
         val keys = words.map(::key)
         val counts = keys.groupingBy { it }.eachCount()
-        return words.mapIndexed { i, raw ->
+        val moods = words.mapIndexed { i, raw ->
             val k = keys[i]
             when {
                 k.isEmpty() -> WordMood.PLAIN
@@ -55,7 +55,14 @@ internal object LyricMood {
                 chorus && raw.length >= 6 -> WordMood.ENERGY
                 else -> WordMood.PLAIN
             }
+        }.toMutableList()
+        // A line sung with force (the chorus, or a fast one) has one word that carries it: the
+        // longest that isn't soft. It is shouted — cut from paper — so every chorus has its cry.
+        if ((chorus || pace == LinePace.FAST) && moods.none { it == WordMood.HOT }) {
+            val peak = words.indices.filter { moods[it] != WordMood.CALM && keys[it].length >= 4 }.maxByOrNull { keys[it].length }
+            if (peak != null) moods[peak] = WordMood.HOT
         }
+        return moods
     }
 
     /** A line sung more than once in the song is its chorus (or a hook) — the line's energy. */
@@ -79,12 +86,19 @@ internal object LyricMood {
         "hell", "dick", "pussy", "cunt", "bastard", "whore", "slut", "hoe", "hoes", "nigga", "niggas", "crap", "piss", "pissed",
         "hate", "hatred", "kill", "killed", "killing", "die", "dead", "death", "blood", "bleed", "burn", "burning", "fire", "rage", "angry", "anger",
         "fight", "fighting", "war", "scream", "screaming", "shut", "stupid", "idiot", "liar", "lies", "enemy", "revenge", "destroy", "pain", "hurt", "broken",
+        "never", "stop", "gone", "cry", "crying", "tears", "alone", "lonely", "leave", "lost", "lose", "losing", "break", "breaking", "mad", "bad", "wrong",
+        "fool", "fools", "cold", "dark", "darkness", "scared", "fear", "afraid", "nightmare", "poison", "toxic", "danger", "dangerous", "trouble", "wild", "loud",
+        "crazy", "insane", "savage", "monster", "demon", "devil", "evil", "sin", "guilty", "shame", "jealous", "greedy", "cruel", "bitter", "numb", "empty",
+        "hide", "falling", "goodbye", "sorry", "louder", "harder", "faster",
         "f**k", "f*ck", "s**t", "sh*t", "b*tch", "a**",
         // Indonesian
         "anjing", "anjir", "anjrit", "bangsat", "bajingan", "kontol", "memek", "ngentot", "goblok", "tolol", "bodoh", "brengsek", "keparat",
         "setan", "sialan", "sial", "babi", "monyet", "tai", "taik", "bego", "kampret", "jancok", "jancuk", "cok", "asu", "pantek", "pepek", "perek", "lonte",
         "benci", "marah", "murka", "dendam", "bunuh", "mati", "darah", "hancur", "hancurkan", "bakar", "api", "perang", "lawan", "musuh", "pengkhianat",
         "bohong", "pembohong", "dusta", "sakit", "luka", "muak", "jijik", "kejam", "kasar", "neraka", "iblis",
+        "jangan", "takkan", "pergi", "pergilah", "tinggalkan", "sendiri", "sepi", "sunyi", "hilang", "kehilangan", "menangis", "tangis", "airmata", "pecah",
+        "gila", "liar", "takut", "gelap", "racun", "bahaya", "salah", "bodohnya", "kecewa", "lelah", "letih", "hampa", "sesak", "teriak", "berteriak", "lari", "jatuh",
+        "kumohon",
     )
     private val hotStems = setOf("fuck", "shit", "bitch", "anjing", "bangsat", "kontol", "ngentot", "goblok", "jancok", "bajing")
 

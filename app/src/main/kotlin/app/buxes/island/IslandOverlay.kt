@@ -10,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
@@ -178,6 +179,8 @@ private class IslandView(
     private var subtitle = ""
     private var artUri: String? = null
     private var art: Bitmap? = null
+    /** The cover as a few blurred cells, stretched behind the glass. */
+    private var glassArt: Bitmap? = null
     private var artJob: Job? = null
     private var playing = false
     private val orb = IslandOrbDriver(graph.playbackController, graph.audioPulse)
@@ -215,6 +218,7 @@ private class IslandView(
             artJob = artworkUri?.let { uri ->
                 graph.appScope.launch {
                     art = runCatching { graph.artworkLoader.load(uri, (40 * density).toInt())?.asAndroidBitmap() }.getOrNull()
+                    glassArt = art?.let { soften(it) }
                     invalidate()
                 }
             }
@@ -236,11 +240,11 @@ private class IslandView(
         val cut = if (Build.VERSION.SDK_INT >= 28) rootWindowInsets?.displayCutout?.boundingRects?.minByOrNull { it.top } else null
         val y = if (cut != null && cut.top < 48 * density && cut.height() in (12 * density).toInt()..(60 * density).toInt()) {
             h = cut.height().toFloat().coerceIn(30 * density, 40 * density)
-            (cut.centerY() - h / 2f).toInt().coerceAtLeast(0)
+            (cut.centerY() - h / 2f + 6 * density).toInt().coerceAtLeast(0)
         } else {
             h = 36 * density
             val status = if (Build.VERSION.SDK_INT >= 30) rootWindowInsets?.getInsets(android.view.WindowInsets.Type.statusBars())?.top ?: 0 else (24 * density).toInt()
-            status + (4 * density).toInt()
+            status + (8 * density).toInt()
         }
         textPaint.textSize = (h * 0.37f).coerceIn(11.5f * density, 14 * density)
         placed = true
@@ -280,11 +284,25 @@ private class IslandView(
         // Opens out from its middle to both sides.
         canvas.save()
         canvas.clipRect(w / 2f - w / 2f * e, 0f, w / 2f + w / 2f * e, h)
-        // Dark glass.
+        // The song's own cover, softened, behind dark glass (as the app's displays are).
+        val capsule = RectF(0f, 0f, w, h)
         paint.shader = null
         paint.style = Paint.Style.FILL
-        paint.color = Color.argb(222, 14, 14, 18)
-        canvas.drawRoundRect(RectF(0f, 0f, w, h), r, r, paint)
+        val soft = glassArt
+        if (soft != null) {
+            val m = Matrix()
+            val sc = maxOf(w / soft.width, h / soft.height)
+            m.setScale(sc, sc)
+            m.postTranslate((w - soft.width * sc) / 2f, (h - soft.height * sc) / 2f)
+            paint.shader = BitmapShader(soft, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply { setLocalMatrix(m) }
+            paint.color = Color.WHITE
+            canvas.drawRoundRect(capsule, r, r, paint)
+            paint.shader = null
+            paint.color = Color.argb(150, 10, 10, 14)
+        } else {
+            paint.color = Color.argb(222, 14, 14, 18)
+        }
+        canvas.drawRoundRect(capsule, r, r, paint)
         paint.style = Paint.Style.STROKE; paint.strokeWidth = density; paint.color = Color.argb(60, 255, 255, 255)
         canvas.drawRoundRect(RectF(0.5f * density, 0.5f * density, w - 0.5f * density, h - 0.5f * density), r, r, paint)
         paint.style = Paint.Style.FILL
@@ -316,8 +334,17 @@ private class IslandView(
         val line = if (subtitle.isEmpty()) title else "$title   •   $subtitle"
         val tw = textPaint.measureText(line)
         if (tw <= textBox) {
+            textPaint.shader = null
             canvas.drawText(line, x, baseline, textPaint)
         } else {
+            // The ends melt away instead of being cut: the text's own paint fades at both edges.
+            val fade = 10 * density
+            textPaint.shader = LinearGradient(
+                x, 0f, x + textBox, 0f,
+                intArrayOf(Color.TRANSPARENT, Color.WHITE, Color.WHITE, Color.TRANSPARENT),
+                floatArrayOf(0f, fade / textBox, 1f - fade / textBox, 1f),
+                Shader.TileMode.CLAMP,
+            )
             val space = 36 * density
             val cycle = tw + space
             val speed = 30 * density / 1000f
@@ -326,6 +353,7 @@ private class IslandView(
             val offset = (elapsed * speed) % cycle
             canvas.drawText(line, x - offset, baseline, textPaint)
             canvas.drawText(line, x - offset + cycle, baseline, textPaint)
+            textPaint.shader = null
         }
         canvas.restore()
 
@@ -428,6 +456,12 @@ private class IslandView(
         paint.color = Color.argb(alpha, 255, 255, 255)
         canvas.drawPath(path, paint)
     }
+
+    /** A tiny copy of the cover (a few cells a side), which the shader stretches smooth: a cheap blur. */
+    private fun soften(src: Bitmap): Bitmap? = runCatching {
+        val small = Bitmap.createScaledBitmap(src, 6, 6, true)
+        Bitmap.createScaledBitmap(small, 48, 48, true)
+    }.getOrNull()
 
     private var bodyCorner = -1f
     private val inkPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0x1B, 0x19, 0x16) }
